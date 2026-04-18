@@ -1,0 +1,212 @@
+{
+  "rvc_base_url": {
+    "description": "RVC API Gradio 后端服务地址",
+    "type": "string",
+    "hint": "你的 Gradio API RVC 后端运行的地址，必须以 / 结尾",
+    "default": "http://127.0.0.1:7860/"
+  },
+  "svc_base_url": {
+    "description": "SVC API Gradio 后端服务地址",
+    "type": "string",
+    "hint": "你的 Gradio API SVC 后端运行的地址，必须以 / 结尾",
+    "default": "http://127.0.0.1:7866/"
+  },
+  "default_api": {
+    "description": "默认使用的音乐 API",
+    "type": "string",
+    "hint": "可选 'netease', 'netease_nodejs' 或 'qqmusic'。推荐使用 'netease_nodejs' 或 'qqmusic'",
+    "default": "netease_nodejs"
+  },
+  "nodejs_base_url": {
+    "description": "网易云音乐 Node.js API 地址",
+    "type": "string",
+    "hint": "仅在 default_api 设置为 'netease_nodejs' 时生效",
+    "default": "https://wyy.xhily.com"
+  },
+  "qqmusic_api_url": {
+    "description": "QQ音乐API 服务地址（已弃用，现在使用Python库）",
+    "type": "string",
+    "hint": "保留兼容性，实际不再需要",
+    "default": "http://127.0.0.1:3300"
+  },
+  "enable_qqmusic": {
+    "description": "启用QQ音乐搜索功能",
+    "type": "bool",
+    "hint": "开启后可以使用QQ音乐搜索歌曲进行翻唱。支持LLM工具调用和手动指令调用。",
+    "default": true
+  },
+  "disable_netease": {
+    "description": "禁用网易云音乐点歌",
+    "type": "bool",
+    "hint": "开启后，网易云音乐功能将被完全禁用（包括LLM自动调用翻唱工具和手动命令），所有点歌请求将强制使用QQ音乐。推荐开启以获取更全的音乐版权。",
+    "default": false
+  },
+  "timeout": {
+    "description": "等待用户选择的超时时间（秒）",
+    "type": "int",
+    "hint": "等待用户选择歌曲或模型的最大时间",
+    "default": 30
+  },
+  "inference_timeout": {
+    "description": "AI推理超时时间（秒）",
+    "type": "int",
+    "hint": "等待后端完成音频转换的最大时间，如果经常超时可以调大这个值",
+    "default": 300
+  },
+  "llm_tool_timeout": {
+    "description": "LLM工具调用超时时间（秒）",
+    "type": "int",
+    "hint": "LLM调用翻唱工具的最大等待时间。由于翻唱采用异步模式，此值建议设为5-10秒让LLM快速收到'正在处理'的响应。设为0则使用系统默认值(60秒)。",
+    "default": 10
+  },
+  "enable_rvc": {
+    "description": "启用RVC推理引擎",
+    "type": "bool",
+    "hint": "开启后允许使用RVC模型进行翻唱（包括命令/rvc、/qqrvc、LLM工具rvc_cover、smart_cover指定rvc等）。关闭后所有RVC相关功能将被禁用，LLM会收到明确提示并建议使用SVC。",
+    "default": true
+  },
+  "enable_svc": {
+    "description": "启用SVC推理引擎",
+    "type": "bool",
+    "hint": "开启后允许使用SVC模型进行翻唱（包括命令/svc、/qqsvc、LLM工具svc_cover、smart_cover指定svc等）。关闭后所有SVC相关功能将被禁用，LLM会收到明确提示并建议使用RVC。",
+    "default": true
+  },
+  "rvc_models_keywords": {
+    "description": "RVC 模型别名配置",
+    "type": "list",
+    "hint": "这是一个列表，每行一个模型。格式为 '模型文件名|||别名'。使用 /刷新rvc模型 命令自动获取",
+    "default": []
+  },
+  "svc_models_keywords": {
+    "description": "SVC 模型别名配置",
+    "type": "list",
+    "hint": "这是一个列表，每行一个模型。格式为 '模型文件名|||别名'。使用 /刷新svc模型 命令自动获取",
+    "default": []
+  },
+  "llm_force_mode": {
+    "description": "LLM强制模式 - 禁用手动命令，只允许通过LLM调用点歌工具",
+    "type": "bool",
+    "hint": "开启后，/rvc 和 /svc 命令将被禁用，只能通过对话让LLM自动调用翻唱工具。适合纯智能交互场景。",
+    "default": false
+  },
+  "enable_smart_cover": {
+    "description": "启用方案A：智能单步翻唱（smart_cover）",
+    "type": "bool",
+    "hint": "提供一键智能翻唱工具，自动完成搜索+选择+翻唱全流程。用户只需说'翻唱《歌名》'即可。",
+    "default": true
+  },
+  "enable_enhanced_context": {
+    "description": "启用方案B：增强上下文记忆",
+    "type": "bool",
+    "hint": "优化搜索结果返回格式，增加结构化信息帮助LLM更好地记住选项和上下文。",
+    "default": true
+  },
+  "enable_confirm_mechanism": {
+    "description": "启用方案C：确认机制",
+    "type": "bool",
+    "hint": "提供确认选择工具，在执行重要操作前让LLM确认用户意图，支持'就这个''换一个''确定'等自然语言指令。",
+    "default": true
+  },
+  "enable_batch_cover": {
+    "description": "启用方案D：批量翻唱",
+    "type": "bool",
+    "hint": "支持一次请求翻唱多首歌曲，用户可以说'帮我翻唱这三首歌：《A》《B》《C》'。",
+    "default": true
+  },
+  "enable_preference_learning": {
+    "description": "启用方案E：偏好学习与推荐",
+    "type": "bool",
+    "hint": "记录用户常用的模型、音调偏好等，下次翻唱时能推荐最合适配置。数据保存在 data 目录下。",
+    "default": true
+  },
+  "default_api_type": {
+    "description": "默认翻唱类型",
+    "type": "string",
+    "hint": "当用户未指定时使用的默认翻唱类型，可选 'rvc' 或 'svc'",
+    "default": "rvc"
+  },
+  "default_model_index": {
+    "description": "默认模型序号",
+    "type": "int",
+    "hint": "当用户未指定时使用的默认模型序号（从1开始）",
+    "default": 1
+  },
+  "default_key_shift": {
+    "description": "默认音调调整",
+    "type": "int",
+    "hint": "当用户未指定时使用的默认音调调整值（-12到12）",
+    "default": 0
+  },
+  "max_batch_size": {
+    "description": "批量翻唱最大数量",
+    "type": "int",
+    "hint": "单次批量翻唱的最大歌曲数量限制，防止滥用",
+    "default": 5
+  },
+  "preference_storage_path": {
+    "description": "偏好数据存储路径",
+    "type": "string",
+    "hint": "用户偏好数据的存储文件路径（JSON格式）",
+    "default": "data/user_preferences.json"
+  },
+  "third_party_api_key": {
+    "description": "第三方音乐API密钥 (jkapi.com)",
+    "type": "string",
+    "hint": "用于获取QQ音乐付费歌曲的播放链接。注册 https://jkapi.com 后在用户中心获取apiKey。留空则不使用第三方API。",
+    "default": "34accb9e82cc8ab5f8be9a59b8ab857c"
+  },
+  "enable_progress_bar": {
+    "description": "开启渲染和分离进度条输出到QQ聊天窗口",
+    "type": "bool",
+    "hint": "开启后，模型分离人声和渲染合成的进度会实时发送到聊天窗口",
+    "default": true
+  },
+  "enable_llm_success_notify": {
+    "description": "处理完成后通知大语言模型 (LLM)",
+    "type": "bool",
+    "hint": "开启后，后台生成完音频会给 LLM 发送系统消息，让 LLM 用其人设回复一句'生成成功'的提示",
+    "default": true
+  },
+  "progress_update_interval": {
+    "description": "进度条刷屏频率（秒）",
+    "type": "int",
+    "hint": "每次发送进度条消息的间隔时间，单位为秒。建议设置在2-5秒之间以防刷屏",
+    "default": 3
+  },
+  "f0_method": {
+    "description": "RVC音高提取算法（F0方法）",
+    "type": "string",
+    "hint": "可选值：rmvpe（默认，效果最好，适合干净人声）、crepe（效果好但更吃GPU，电音人声推荐）、harvest（ZLUDA/AMD模式下可能报tensor维度错误，不推荐）、pm（速度最快但效果一般）。遇到电音人声跑调时建议切换为crepe。",
+    "default": "rmvpe"
+  },
+  "svc_f0_method": {
+    "description": "SVC音高提取算法（F0方法）",
+    "type": "string",
+    "hint": "可选值：fcpe（默认，速度快效果好，SVC推荐）、rmvpe（效果稳定）、crepe（效果好但吃GPU）、harvest（对电音人声容忍度更高）、parselmouth（速度快）、dio（速度最快效果一般）。SVC-Fusion默认使用fcpe，一般无需更改。",
+    "default": "fcpe"
+  },
+  "index_rate": {
+    "description": "RVC特征检索比率（Index Rate）",
+    "type": "string",
+    "hint": "控制RVC推理时特征检索（Index）的权重。范围0~1，默认0.75。值越高越接近原模型音色但可能生硬，值越低模型自由发挥更多但可能偏离音色。电音人声沙哑时可尝试降低到0.5。",
+    "default": "0.75"
+  },
+  "filter_radius": {
+    "description": "RVC F0滤波半径（Filter Radius）",
+    "type": "int",
+    "hint": "对提取的音高（F0）进行中值滤波的半径。范围0~10，默认3。值越大F0越平滑（减少跑调抖动），但可能丢失音高细节。电音人声沙哑时可尝试调高到5。",
+    "default": 3
+  },
+  "reverb_intensity": {
+    "description": "RVC/SVC 混响强度 (Reverb)",
+    "type": "int",
+    "hint": "为生成的音频添加混响效果的强度。范围0~10，0为干声无混响，4为默认值，10为宏大混响（类似演唱会效果）。",
+    "default": 4
+  },
+  "delay_intensity": {
+    "description": "RVC/SVC 回声/延迟强度 (Delay)",
+    "type": "int",
+    "hint": "为生成的音频添加回声效果的强度，自动同步歌曲BPM。范围0~10，0为关闭回声，数值越大回声越明显。建议与混响搭配使用。",
+    "default": 0
+  }
+}
