@@ -1,7 +1,7 @@
 # astrbot_plugin_rvc_svc（猫猫翻唱插件）
 
 > **版本：** v2.5.0 | **作者：** Matsuko / CCYellowStar2
-
+原项目链接：[https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
 ## ✨ 简介
 
 一个 [AstrBot](https://github.com/Soulter/AstrBot) 插件，可以使用 **RVC** 和 **SVC** 模型对歌曲进行 AI 翻唱。支持自动下载歌曲、人声伴奏分离、AI 变声、音频后处理和混音等全流程操作。
