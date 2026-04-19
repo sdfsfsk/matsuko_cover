@@ -54,10 +54,15 @@ pip install gradio_client aiohttp qqmusic-api-python
 
 ### 1. 下载 RVCSVC-API 后端整合包
 
+🎉 **RVCSVC-API v1.1 更新内容：**
+- **完全绿色独立**：不再依赖外部（如 SVC-Fusion）的 Python 环境，自带完整运行环境，解压即用，支持任意目录移动！
+- **ZLUDA 核心升级**：RVCSVC-API-MSST 升级至最新 ZLUDA 核心，完美支持 RDNA4 (RX 9000系) 等最新架构显卡，修复了 `CUBLAS_STATUS_NOT_SUPPORTED` 报错。
+- **动态伴奏音高**：新增伴奏音高自动同步功能，当人声进行非八度（±12）的升降调时，伴奏会自动进行相应的移调处理。
+- **稳定性修复**：修复了导出音频时因 `temp` 目录缺失导致的 `FileNotFoundError` 错误。
+
 我们为您准备了两个不同版本的后端整合包，请根据您的需求下载：
 
-- 🔗 **百度网盘下载链接**：[https://pan.baidu.com/s/1KaVKwArsN2EGdfwGVXvqoA?pwd=dk8r](https://pan.baidu.com/s/1KaVKwArsN2EGdfwGVXvqoA?pwd=dk8r)
-- 🔑 **提取码**：`dk8r`
+- 🔗 **下载链接**：(稍后补充)
 
 **两个版本的区别说明：**
 1. **`RVCSVC-API-amd` (基础/兼容/DirectML版)**
