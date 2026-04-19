@@ -4,7 +4,7 @@
 原项目链接：[https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
 ## ✨ 简介
 
-一个 [AstrBot](https://github.com/Soulter/AstrBot) 插件，可以使用 **RVC** 和 **SVC** 模型对歌曲进行 AI 翻唱。支持自动下载歌曲、人声伴奏分离、AI 变声、音频后处理和混音等全流程操作。
+一个在原项目加强的 [AstrBot](https://github.com/Soulter/AstrBot) 插件，可以使用 **RVC** 和 **SVC** 模型对歌曲进行 AI 翻唱。支持自动下载歌曲、人声伴奏分离、AI 变声、音频后处理和混音等全流程操作。原作者：CCYellowStar2
 
 ### 注意：
 
