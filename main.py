@@ -24,11 +24,11 @@ except ImportError:
 MODEL_ALIAS_SEPARATOR = "|||"
 
 @register(
-    "astrbot_plugin_rvc_svc",
-    "CCYellowStar2",
+    "astrbot_plugin_matsuko_cover",
+    "Matsuko",
     "RVC/SVC翻唱网易云歌曲（支持LLM智能调用）",
     "2.5.1",
-    "https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc",
+    "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
