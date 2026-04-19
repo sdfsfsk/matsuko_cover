@@ -513,3 +513,4 @@ LLM 会自动调用对应的工具完成操作。
 - [UVR5](https://github.com/Anjok07/ultimatevocalremovergui) — 人声分离工具
 - [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) — 网易云音乐 API
 - [RVCSVC-API](https://github.com/CCYellowStar2/RVCSVC-API) — RVC/SVC 后端 API 整合 （旧链接）
+- [原作者项目](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc) — 非常感谢提供灵感
