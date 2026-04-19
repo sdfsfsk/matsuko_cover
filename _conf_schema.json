@@ -212,20 +212,50 @@
   "msst_batch_size": {
     "description": "MSST 批处理大小 (Batch Size)",
     "type": "int",
-    "hint": "【仅MSST后端有效】控制分离时的显存占用与速度。默认 2。显存大于16G可调至4或8以加速，经常爆显存请调至1。",
+    "hint": "【仅RVCSVC-API-MSST后端有效】控制MSST分离时的显存占用与速度。默认 2。显存大于16G可调至4或8以加速，经常爆显存请调至1。使用amd后端时此参数无效。",
     "default": 2
   },
   "msst_num_overlap": {
     "description": "MSST 重叠次数 (Num Overlap)",
     "type": "int",
-    "hint": "【仅MSST后端有效】控制分离的平滑度。默认 4。值越大（如8）边缘越平滑但速度成倍下降，值越小（如2）速度越快但可能产生轻微咔哒声。",
+    "hint": "【仅RVCSVC-API-MSST后端有效】控制MSST分离的平滑度。默认 4。值越大边缘越平滑但速度成倍下降，值越小速度越快但可能产生轻微咔哒声。使用amd后端时此参数无效。",
     "default": 4
   },
   "msst_normalize": {
     "description": "MSST 音频归一化 (Normalize)",
     "type": "bool",
-    "hint": "【仅MSST后端有效】开启后会在分离前自动平衡音频音量，提高稳定性。默认开启。",
+    "hint": "【仅RVCSVC-API-MSST后端有效】开启后会在MSST分离前自动平衡音频音量，提高稳定性。默认开启。使用amd后端时此参数无效。",
     "default": true
+  },
+  "uvr5_agg": {
+    "description": "UVR5 人声分离聚合度",
+    "type": "int",
+    "hint": "【仅RVCSVC-API-amd后端有效】控制UVR5人声分离的激进程度，范围0~20。值越大分离越激进（提取人声更完整但可能混入伴奏），值越小越保守（人声更干净但可能丢失细节）。默认10。使用MSST后端时此参数无效。",
+    "default": 10
+  },
+  "uvr5_tta": {
+    "description": "UVR5 测试时增强 (TTA)",
+    "type": "bool",
+    "hint": "【仅RVCSVC-API-amd后端有效】开启后对音频做多次翻转推理再取平均，提升人声分离质量但速度慢约一倍。默认关闭。使用MSST后端时此参数无效。",
+    "default": false
+  },
+  "uvr5_postprocess": {
+    "description": "UVR5 后处理",
+    "type": "bool",
+    "hint": "【仅RVCSVC-API-amd后端有效】开启后会检测并去除人声频谱中的静音区域，进一步减少伴奏泄漏。默认关闭。使用MSST后端时此参数无效。",
+    "default": false
+  },
+  "uvr5_window_size": {
+    "description": "UVR5 窗口大小",
+    "type": "int",
+    "hint": "【仅RVCSVC-API-amd后端有效】STFT窗口大小，影响频谱分辨率。可选值：256、512、1024。默认512。值越大频谱分辨率越高但速度越慢。使用MSST后端时此参数无效。",
+    "default": 512
+  },
+  "uvr5_high_end_process": {
+    "description": "UVR5 高频处理方式",
+    "type": "string",
+    "hint": "【仅RVCSVC-API-amd后端有效】处理UVR5模型对高频段覆盖不足的问题。mirroring：将中高频镜像填充到高频区域（推荐）；none：不处理高频。默认mirroring。使用MSST后端时此参数无效。",
+    "default": "mirroring"
   },
   "enable_send_file": {
     "description": "推理完成后同时以文件形式发送到群聊",

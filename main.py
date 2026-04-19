@@ -101,10 +101,17 @@ class MusicPlugin(Star):
         self.reverb_intensity = config.get("reverb_intensity", 4)
         self.delay_intensity = config.get("delay_intensity", 0)
         
-        # === MSST 分离参数 ===
+        # === MSST 分离参数（仅 RVCSVC-API-MSST 后端生效）===
         self.msst_batch_size = config.get("msst_batch_size", 2)
         self.msst_num_overlap = config.get("msst_num_overlap", 4)
         self.msst_normalize = config.get("msst_normalize", True)
+        
+        # === UVR5 分离参数（仅 RVCSVC-API-amd 后端生效）===
+        self.uvr5_agg = config.get("uvr5_agg", 10)
+        self.uvr5_tta = config.get("uvr5_tta", False)
+        self.uvr5_postprocess = config.get("uvr5_postprocess", False)
+        self.uvr5_window_size = config.get("uvr5_window_size", 512)
+        self.uvr5_high_end_process = config.get("uvr5_high_end_process", "mirroring")
         
         self.max_batch_size = config.get("max_batch_size", 5)
         self.preference_storage_path = config.get("preference_storage_path", "data/user_preferences.json")
@@ -179,6 +186,7 @@ class MusicPlugin(Star):
         return self.user_preferences[user_id]
 
     async def _async_predict(self, client, *args, timeout=300, event=None, **kwargs):
+        logger.debug(f"[UVR5 Debug] 传参: uvr5_agg={kwargs.get('uvr5_agg')}, uvr5_tta={kwargs.get('uvr5_tta')}, uvr5_postprocess={kwargs.get('uvr5_postprocess')}, uvr5_window_size={kwargs.get('uvr5_window_size')}, uvr5_high_end_process={kwargs.get('uvr5_high_end_process')}")
         loop = asyncio.get_running_loop()
         job = client.submit(*args, **kwargs)
         
@@ -736,6 +744,11 @@ class MusicPlugin(Star):
                 reverb_intensity=self.reverb_intensity,
                 delay_intensity=self.delay_intensity,
                 **({"svc_f0_method": self.svc_f0_method} if api_type == "svc" else {"f0_method": self.f0_method, "index_rate": self.index_rate, "filter_radius": self.filter_radius}),
+                uvr5_agg=self.uvr5_agg,
+                uvr5_tta=self.uvr5_tta,
+                uvr5_postprocess=self.uvr5_postprocess,
+                uvr5_window_size=self.uvr5_window_size,
+                uvr5_high_end_process=self.uvr5_high_end_process,
                 msst_batch_size=self.msst_batch_size,
                 msst_num_overlap=self.msst_num_overlap,
                 msst_normalize=self.msst_normalize,
@@ -1057,6 +1070,11 @@ class MusicPlugin(Star):
                 reverb_intensity=self.reverb_intensity,
                 delay_intensity=self.delay_intensity,
                 **({"svc_f0_method": self.svc_f0_method} if api_type == "svc" else {"f0_method": self.f0_method, "index_rate": self.index_rate, "filter_radius": self.filter_radius}),
+                uvr5_agg=self.uvr5_agg,
+                uvr5_tta=self.uvr5_tta,
+                uvr5_postprocess=self.uvr5_postprocess,
+                uvr5_window_size=self.uvr5_window_size,
+                uvr5_high_end_process=self.uvr5_high_end_process,
                 msst_batch_size=self.msst_batch_size,
                 msst_num_overlap=self.msst_num_overlap,
                 msst_normalize=self.msst_normalize,
