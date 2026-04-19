@@ -58,6 +58,11 @@ pip install gradio_client aiohttp qqmusic-api-python
 
 ### 1. 下载 RVCSVC-API 后端整合包
 
+🎉 **RVCSVC-API v1.2.1 更新内容：**
+- **UVR5 参数动态化**：UVR5 人声分离参数（聚合度、TTA、后处理、窗口大小、高频处理方式）现支持从插件端动态传参，不再硬编码。可在 AstrBot 插件配置面板中调整，无需修改后端代码。
+- **API 参数统一**：RVC 和 SVC 两个后端的 `/convert` API 参数列表完全统一，UVR5 和 MSST 参数同时传递，各后端自动忽略不适用的参数，插件无需区分后端类型。
+- **参数调试日志**：后端启动推理时会打印完整的 UVR5/MSST 参数信息，方便排查参数传递问题。
+
 🎉 **RVCSVC-API v1.1 更新内容：**
 - **完全绿色独立**：不再依赖外部（如 SVC-Fusion）的 Python 环境，自带完整运行环境，解压即用，支持任意目录移动！
 - **ZLUDA 核心升级**：RVCSVC-API-MSST 升级至最新 ZLUDA 核心，完美支持 RDNA4 (RX 9000系) 等最新架构显卡，修复了 `CUBLAS_STATUS_NOT_SUPPORTED` 报错。
