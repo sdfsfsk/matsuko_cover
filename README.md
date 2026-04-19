@@ -62,7 +62,8 @@ pip install gradio_client aiohttp qqmusic-api-python
 
 我们为您准备了两个不同版本的后端整合包，请根据您的需求下载：
 
-- 🔗 **下载链接**：(稍后补充)
+- 🔗 **百度网盘下载链接**：[点击这里下载](https://pan.baidu.com/s/1SGT3tstQu6IWV5XtcGVcnA?pwd=c3gm)
+- 🔑 **提取码**：`c3gm`
 
 **两个版本的区别说明：**
 1. **`RVCSVC-API-amd` (基础/兼容/DirectML版)**
