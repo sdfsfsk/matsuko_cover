@@ -6,6 +6,10 @@
 
 一个 [AstrBot](https://github.com/Soulter/AstrBot) 插件，可以使用 **RVC** 和 **SVC** 模型对歌曲进行 AI 翻唱。支持自动下载歌曲、人声伴奏分离、AI 变声、音频后处理和混音等全流程操作。
 
+### 注意：
+
+⚡ SVC-Fusion推理端的请去我的仓库下载SVC-Fusion替换文件。链接：https://github.com/sdfsfsk/SVC-Fusion-fix 
+
 ### 核心特性
 
 | 特性 | 说明 |
@@ -88,7 +92,7 @@ pip install gradio_client aiohttp qqmusic-api-python
 > 
 > 🚨 **【特别提醒：SVC-Fusion 用户必看】** 🚨
 > 如果您使用的是 `SVC-Fusion` 作为底层 SVC 引擎，因为原版代码在接口通信和模型加载上与本插件存在兼容性问题，您**必须**替换部分核心文件！
-> - 我们在整合包中提供了一个名为 `SVC-Fusion替换文件` 的文件夹（内含魔改补丁）。
+> - 在我仓库中提供了一个名为 `SVC-Fusion替换文件` 的文件夹（内含魔改补丁），链接在标题。
 > - **操作方法**：将该补丁文件夹中的 `amd` 目录直接复制，**覆盖**到您原版 `SVC-Fusion` 的根目录下即可完成适配！
 
 ### 3. 模型文件存放
@@ -505,7 +509,7 @@ LLM 会自动调用对应的工具完成操作。
 
 - [AstrBot](https://github.com/Soulter/AstrBot) — 强大的跨平台聊天机器人框架
 - [RVC](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) — RVC 语音转换项目
-- [so-vits-svc](https://github.com/svc-develop-team/so-vits-svc) — SVC 语音转换项目
+- [so-vits-svc](https://github.com/svc-develop-team/so-vits-svc) — SVC 语音转换项目（已过时）
 - [UVR5](https://github.com/Anjok07/ultimatevocalremovergui) — 人声分离工具
 - [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) — 网易云音乐 API
-- [RVCSVC-API](https://github.com/CCYellowStar2/RVCSVC-API) — RVC/SVC 后端 API 整合
+- [RVCSVC-API](https://github.com/CCYellowStar2/RVCSVC-API) — RVC/SVC 后端 API 整合 （旧链接）
