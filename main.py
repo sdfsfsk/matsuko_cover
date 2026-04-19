@@ -27,7 +27,7 @@ MODEL_ALIAS_SEPARATOR = "|||"
     "astrbot_plugin_rvc_svc",
     "CCYellowStar2",
     "RVC/SVC翻唱网易云歌曲（支持LLM智能调用）",
-    "2.4.3",
+    "2.5.1",
     "https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc",
 )
 class MusicPlugin(Star):
@@ -92,6 +92,12 @@ class MusicPlugin(Star):
         self.filter_radius = config.get("filter_radius", 3)
         self.reverb_intensity = config.get("reverb_intensity", 4)
         self.delay_intensity = config.get("delay_intensity", 0)
+        
+        # === MSST 分离参数 ===
+        self.msst_batch_size = config.get("msst_batch_size", 2)
+        self.msst_num_overlap = config.get("msst_num_overlap", 4)
+        self.msst_normalize = config.get("msst_normalize", True)
+        
         self.max_batch_size = config.get("max_batch_size", 5)
         self.preference_storage_path = config.get("preference_storage_path", "data/user_preferences.json")
 
@@ -704,6 +710,9 @@ class MusicPlugin(Star):
                 reverb_intensity=self.reverb_intensity,
                 delay_intensity=self.delay_intensity,
                 **({"svc_f0_method": self.svc_f0_method} if api_type == "svc" else {"f0_method": self.f0_method, "index_rate": self.index_rate, "filter_radius": self.filter_radius}),
+                msst_batch_size=self.msst_batch_size,
+                msst_num_overlap=self.msst_num_overlap,
+                msst_normalize=self.msst_normalize,
                 api_name="/convert",
                 timeout=self.inference_timeout,
                 event=event
@@ -1020,6 +1029,9 @@ class MusicPlugin(Star):
                 reverb_intensity=self.reverb_intensity,
                 delay_intensity=self.delay_intensity,
                 **({"svc_f0_method": self.svc_f0_method} if api_type == "svc" else {"f0_method": self.f0_method, "index_rate": self.index_rate, "filter_radius": self.filter_radius}),
+                msst_batch_size=self.msst_batch_size,
+                msst_num_overlap=self.msst_num_overlap,
+                msst_normalize=self.msst_normalize,
                 api_name="/convert",
                 timeout=self.inference_timeout,
                 event=event

@@ -1,6 +1,6 @@
 # astrbot_plugin_rvc_svc（猫猫翻唱插件）
 
-> **版本：** v2.5.0 | **作者：** Matsuko / CCYellowStar2
+> **版本：** v2.5.1 | **作者：** Matsuko / CCYellowStar2
 原项目链接：[https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
 ## ✨ 简介
 

@@ -208,5 +208,23 @@
     "type": "int",
     "hint": "为生成的音频添加回声效果的强度，自动同步歌曲BPM。范围0~10，0为关闭回声，数值越大回声越明显。建议与混响搭配使用。",
     "default": 0
+  },
+  "msst_batch_size": {
+    "description": "MSST 批处理大小 (Batch Size)",
+    "type": "int",
+    "hint": "【仅MSST后端有效】控制分离时的显存占用与速度。默认 2。显存大于16G可调至4或8以加速，经常爆显存请调至1。",
+    "default": 2
+  },
+  "msst_num_overlap": {
+    "description": "MSST 重叠次数 (Num Overlap)",
+    "type": "int",
+    "hint": "【仅MSST后端有效】控制分离的平滑度。默认 4。值越大（如8）边缘越平滑但速度成倍下降，值越小（如2）速度越快但可能产生轻微咔哒声。",
+    "default": 4
+  },
+  "msst_normalize": {
+    "description": "MSST 音频归一化 (Normalize)",
+    "type": "bool",
+    "hint": "【仅MSST后端有效】开启后会在分离前自动平衡音频音量，提高稳定性。默认开启。",
+    "default": true
   }
 }
