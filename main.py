@@ -1,5 +1,11 @@
 from pathlib import Path
 import os
+import re
+
+# === 新增：防止系统代理拦截本地请求 ===
+os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
+os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
+
 import asyncio
 import shutil
 import json
@@ -9,7 +15,7 @@ import traceback
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
-from astrbot.core.message.components import Record
+from astrbot.core.message.components import Record, File
 from astrbot.api.message_components import Node, Plain, Image as CompImage
 from astrbot.core.utils.session_waiter import session_waiter, SessionController
 from astrbot.api import logger
@@ -27,7 +33,7 @@ MODEL_ALIAS_SEPARATOR = "|||"
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
     "RVC/SVC翻唱网易云歌曲（支持LLM智能调用）",
-    "2.5.1",
+    "2.5.2",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
@@ -82,6 +88,8 @@ class MusicPlugin(Star):
         self.enable_progress_bar = config.get("enable_progress_bar", True)
         self.progress_update_interval = config.get("progress_update_interval", 3)
         self.enable_llm_success_notify = config.get("enable_llm_success_notify", True)
+        self.enable_send_file = config.get("enable_send_file", False)
+        self.enable_config_report = config.get("enable_config_report", True)
         
         self.default_api_type = config.get("default_api_type", "rvc")
         self.default_model_index = config.get("default_model_index", 1)
@@ -104,6 +112,23 @@ class MusicPlugin(Star):
         # === 方案E：偏好学习系统 ===
         self.user_preferences: Dict[str, Dict] = {}
         self._load_preferences()
+
+    async def _send_cover_result(self, event: AstrMessageEvent, result_path: str, song_name: str = "翻唱"):
+        if not result_path or not os.path.exists(result_path):
+            await event.send(event.plain_result("生成失败，后端未返回有效文件路径。"))
+            return
+        await event.send(event.chain_result([Record(file=result_path)]))
+        if self.enable_send_file:
+            try:
+                file_name = os.path.basename(result_path)
+                name, ext = os.path.splitext(file_name)
+                if not ext:
+                    ext = ".mp3"
+                safe_name = re.sub(r'[\\/:*?"<>|]', '', song_name)
+                send_name = f"{safe_name}{ext}"
+                await event.send(event.chain_result([File(name=send_name, file=result_path)]))
+            except Exception as e:
+                logger.error(f"以文件形式发送翻唱结果失败: {e}")
 
     def _load_preferences(self):
         """加载用户偏好数据"""
@@ -653,6 +678,7 @@ class MusicPlugin(Star):
     async def _send_song(self, event: AstrMessageEvent, song: dict, model_name: str, key_shift: int, api_type="rvc"):
         result_path = None
         temp_audio_file = None
+        song_name = song.get("name", "翻唱")
         try:
             base_url = self.svc_base_url if api_type == "svc" else self.rvc_base_url
             client = Client(base_url)
@@ -718,7 +744,7 @@ class MusicPlugin(Star):
                 event=event
             )
             if result_path and os.path.exists(result_path):
-                await event.send(event.chain_result([Record(file=result_path)]))
+                await self._send_cover_result(event, result_path, song_name=song_name)
             else:
                 await event.send(event.plain_result("生成失败，后端未返回有效文件路径。"))
         except Exception as e:
@@ -728,9 +754,11 @@ class MusicPlugin(Star):
             else:
                 await event.send(event.plain_result(f"生成时发生严重错误: {e}"))
         finally:
+            if self.enable_send_file:
+                await asyncio.sleep(3)
             if result_path and os.path.isfile(result_path):
                 try: os.remove(result_path)
-                except OSError as e: logger.error(f"删除临时文件失败: {e}")
+                except OSError as e: logger.debug(f"删除临时文件失败（文件可能仍被占用）: {e}")
             if temp_audio_file and os.path.isfile(temp_audio_file):
                 try: os.remove(temp_audio_file)
                 except OSError as e: logger.error(f"删除临时音频文件失败: {e}")
@@ -1038,19 +1066,21 @@ class MusicPlugin(Star):
             )
             
             if result_path and os.path.exists(result_path):
-                await event.send(event.chain_result([Record(file=result_path)]))
+                await self._send_cover_result(event, result_path, song_name=selected_song.get('name', song_name))
                 song_artist = selected_song.get('artists', '未知艺人')
                 result_msg = f"已成功使用 {api_type.upper()} 模型【{selected_model}】生成《{selected_song['name']}》({song_artist}) 的翻唱版本！音频文件已发送。"
             else:
                 result_msg = "生成失败，后端未返回有效文件路径。"
                 
             try:
+                if self.enable_send_file:
+                    await asyncio.sleep(3)
                 if result_path and os.path.isfile(result_path):
                     os.remove(result_path)
                 if temp_audio_file and os.path.isfile(temp_audio_file):
                     os.remove(temp_audio_file)
             except OSError as e:
-                logger.error(f"删除临时文件失败: {e}")
+                logger.debug(f"删除临时文件失败（文件可能仍被占用，将在退出时清理）: {e}")
             
             # === 方案E：记录偏好 ===
             if self.enable_preference_learning:
@@ -1265,11 +1295,10 @@ class MusicPlugin(Star):
         try:
             result = await self._do_cover(event, song_name, api_type, model_index, key_shift, music_source)
             
-            if self.enable_enhanced_context:
+            if self.enable_config_report:
                 source_info = f", 音乐源={music_source}" if music_source else ""
                 result += f"\n\n📊 本次配置：类型={api_type.upper()}, 模型={model_display}, 调音={key_shift:+d}{source_info}"
-            
-            await event.send(event.plain_result(result))
+                await event.send(event.plain_result(result))
             
             # === LLM 成功通知机制 ===
             if getattr(self, "enable_llm_success_notify", True) and "已成功" in result:

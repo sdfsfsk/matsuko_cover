@@ -1,6 +1,6 @@
 # astrbot_plugin_matsuko_cover（AI翻唱插件）
 
-> **版本：** v2.5.1 | **作者：** Matsuko / CCYellowStar2
+> **版本：** v2.5.2 | **作者：** Matsuko / CCYellowStar2
 原项目链接：[https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
 ## ✨ 简介
 
@@ -333,6 +333,8 @@ hoshino.pth|||星野
 | `enable_preference_learning` | bool | `true` | 启用偏好学习与推荐系统 |
 | `enable_progress_bar` | bool | `true` | 启用渲染和分离进度条输出到QQ聊天窗口 |
 | `enable_llm_success_notify` | bool | `true` | 处理完成后通知大语言模型 (LLM)，让其用人设回复用户 |
+| `enable_send_file` | bool | `false` | 翻唱完成后同时以文件附件形式发送到群聊，方便群友下载保存 |
+| `enable_config_report` | bool | `true` | 翻唱完成后发送配置信息报告（如"📊 本次配置：类型=RVC, 模型=塔菲, 调音=+0"）。关闭后只发送音频不发送文字消息 |
 | `progress_update_interval` | int | `3` | 进度条消息发送频率（秒），防刷屏保护 |
 
 ### 默认参数配置
@@ -450,6 +452,11 @@ LLM 会自动调用对应的工具完成操作。
 ---
 
 ## 📝 更新日志
+### v2.5.2
+- 📎 **文件发送功能**：新增 `enable_send_file` 开关，开启后翻唱完成时除了发送语音消息外，还会以文件附件形式再发送一份到群聊，方便群友下载保存。
+- 🔇 **配置报告开关**：新增 `enable_config_report` 开关，关闭后翻唱完成时不再发送"已成功使用..."和"📊 本次配置"等文字消息，只发送音频文件。
+- 🐛 **修复网易云翻唱报错**：修复 `_send_song` 方法中 `song_name` 变量未定义导致 `UnboundLocalError` 的问题。
+- 🧹 **临时文件清理优化**：开启文件发送时延迟删除临时文件，避免 Windows 文件占用错误。
 
 ### v2.5.0
 - 🎛️ **RVC/SVC 智能混响与回声控制**：新增 `reverb_intensity` (混响强度) 和 `delay_intensity` (回声/延迟强度) 配置项，支持 0~10 级调节。回声效果会自动检测歌曲 BPM 进行同步，让翻唱音频更具空间感和立体感。同时对 RVC 和 SVC 引擎生效！

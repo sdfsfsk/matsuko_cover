@@ -226,5 +226,17 @@
     "type": "bool",
     "hint": "【仅MSST后端有效】开启后会在分离前自动平衡音频音量，提高稳定性。默认开启。",
     "default": true
+  },
+  "enable_send_file": {
+    "description": "推理完成后同时以文件形式发送到群聊",
+    "type": "bool",
+    "hint": "开启后，翻唱完成时除了发送语音消息外，还会以文件附件的形式再发送一份到群聊，方便群友下载保存。关闭则只发送语音消息。",
+    "default": false
+  },
+  "enable_config_report": {
+    "description": "翻唱完成后发送配置信息报告",
+    "type": "bool",
+    "hint": "开启后，翻唱完成时会额外发送一条包含本次翻唱配置的消息（如：📊 本次配置：类型=RVC, 模型=塔菲, 调音=+0）。关闭则只发送音频不发送配置报告。",
+    "default": true
   }
 }
