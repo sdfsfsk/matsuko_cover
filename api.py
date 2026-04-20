@@ -297,7 +297,10 @@ class QQMusicAPI:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        if data.get("code") == 200 and data.get("music_url"):
+                        if data.get("code") == 200 and data.get("data") and data["data"].get("music"):
+                            logger.info(f"备选API2获取成功: {song_name or songmid}")
+                            return data["data"]["music"]
+                        elif data.get("code") == 200 and data.get("music_url"):
                             logger.info(f"备选API2获取成功: {song_name or songmid}")
                             return data["music_url"]
         except Exception as e:

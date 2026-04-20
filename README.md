@@ -330,7 +330,7 @@ hoshino.pth|||星野
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `llm_force_mode` | bool | `false` | **LLM 强制模式**：开启后禁用 `/rvc` `/svc` 命令，只能通过对话让 LLM 调用工具 |
+| `llm_force_mode` | bool | `false` | **LLM 强制模式**：开启后禁用所有手动命令（`/rvc` `/svc` `/qqrvc` `/qqsvc` `/qq点歌` `/我的翻唱统计`），只能通过对话让 LLM 调用工具 |
 | `enable_smart_cover` | bool | `true` | 启用智能单步翻唱（smart_cover 一键翻唱） |
 | `enable_enhanced_context` | bool | `true` | 启用增强上下文记忆（优化搜索结果格式帮助 LLM 理解） |
 | `enable_confirm_mechanism` | bool | `true` | 启用确认机制（「就这个」「换一个」等自然语言交互） |

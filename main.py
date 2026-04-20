@@ -435,6 +435,9 @@ class MusicPlugin(Star):
 
     @filter.command("qqrvc")
     async def qqrvc(self, event: AstrMessageEvent):
+        if self.llm_force_mode:
+            yield event.plain_result("当前已开启 LLM 强制模式，/qqrvc 命令已被禁用。\n请直接对我说'用QQ音乐翻唱《歌名》'，我会自动帮您处理！")
+            return
         if not self.enable_rvc:
             yield event.plain_result("❌ RVC 功能已在配置中禁用。如需使用请在插件配置中设置 enable_rvc 为 true。")
             return
@@ -449,6 +452,9 @@ class MusicPlugin(Star):
 
     @filter.command("qqsvc")
     async def qqsvc(self, event: AstrMessageEvent):
+        if self.llm_force_mode:
+            yield event.plain_result("当前已开启 LLM 强制模式，/qqsvc 命令已被禁用。\n请直接对我说'用QQ音乐和SVC翻唱《歌名》'，我会自动帮您处理！")
+            return
         if not self.enable_svc:
             yield event.plain_result("❌ SVC 功能已在配置中禁用。如需使用请在插件配置中设置 enable_svc 为 true。")
             return
@@ -463,6 +469,9 @@ class MusicPlugin(Star):
 
     @filter.command("qq点歌")
     async def qq_search(self, event: AstrMessageEvent):
+        if self.llm_force_mode:
+            yield event.plain_result("当前已开启 LLM 强制模式，/qq点歌 命令已被禁用。\n请直接对我说'搜索QQ音乐《歌名》'，我会自动帮您处理！")
+            return
         if not self.enable_qqmusic:
             yield event.plain_result("❌ QQ音乐功能未启用！请在插件配置中开启 'enable_qqmusic' 开关。")
             return

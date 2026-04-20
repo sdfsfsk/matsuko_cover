@@ -84,9 +84,9 @@
     "default": []
   },
   "llm_force_mode": {
-    "description": "LLM强制模式 - 禁用手动命令，只允许通过LLM调用点歌工具",
+    "description": "LLM强制模式 - 禁用所有手动命令",
     "type": "bool",
-    "hint": "开启后，/rvc 和 /svc 命令将被禁用，只能通过对话让LLM自动调用翻唱工具。适合纯智能交互场景。",
+    "hint": "开启后，所有手动命令（/rvc、/svc、/qqrvc、/qqsvc、/qq点歌、/我的翻唱统计）将被禁用，只能通过对话让LLM自动调用翻唱工具。适合纯智能交互场景。",
     "default": false
   },
   "enable_smart_cover": {
