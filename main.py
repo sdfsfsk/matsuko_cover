@@ -10,8 +10,9 @@ import asyncio
 import shutil
 import json
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Set
 import traceback
+from contextlib import asynccontextmanager
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
@@ -32,8 +33,8 @@ MODEL_ALIAS_SEPARATOR = "|||"
 @register(
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
-    "RVC/SVC翻唱网易云歌曲（支持LLM智能调用）",
-    "2.5.2",
+    "RVC/SVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈）",
+    "2.5.4",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
@@ -116,9 +117,22 @@ class MusicPlugin(Star):
         self.max_batch_size = config.get("max_batch_size", 5)
         self.preference_storage_path = config.get("preference_storage_path", "data/user_preferences.json")
 
+        self.enable_auto_key_shift = config.get("enable_auto_key_shift", False)
+        self.male_to_female_shift = config.get("male_to_female_shift", 12)
+        self.female_to_male_shift = config.get("female_to_male_shift", -12)
+        self.artist_gender_map = self._parse_gender_map(config.get("artist_gender_map", []))
+        self.model_gender_map = self._parse_gender_map(config.get("model_gender_map", []))
+
         # === 方案E：偏好学习系统 ===
         self.user_preferences: Dict[str, Dict] = {}
+        self._pref_lock = asyncio.Lock()  # 偏好数据并发锁
         self._load_preferences()
+        
+        # === 异步任务追踪 ===
+        self._pending_tasks: Set[asyncio.Task] = set()
+        
+        # === 性别识别缓存 ===
+        self._gender_cache: Dict[str, str] = {}
 
     async def _send_cover_result(self, event: AstrMessageEvent, result_path: str, song_name: str = "翻唱"):
         if not result_path or not os.path.exists(result_path):
@@ -152,20 +166,42 @@ class MusicPlugin(Star):
             logger.error(f"加载偏好数据失败: {e}")
             self.user_preferences = {}
 
-    def _save_preferences(self):
-        """保存用户偏好数据"""
+    async def _save_preferences(self):
+        """保存用户偏好数据（异步安全）"""
         if not self.enable_preference_learning:
             return
             
+        async with self._pref_lock:
+            try:
+                pref_path = Path(self.preference_storage_path)
+                pref_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(pref_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.user_preferences, f, ensure_ascii=False, indent=2)
+                logger.info(f"已保存用户偏好数据: {len(self.user_preferences)} 个用户")
+            except Exception as e:
+                logger.error(f"保存偏好数据失败: {e}")
+    
+    def _create_tracked_task(self, coro) -> asyncio.Task:
+        """创建被追踪的异步任务，防止任务丢失和异常静默"""
+        task = asyncio.create_task(coro)
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
+        return task
+    
+    @asynccontextmanager
+    async def _get_gradio_client(self, base_url: str):
+        """安全获取Gradio Client，确保正确关闭"""
+        client = None
         try:
-            pref_path = Path(self.preference_storage_path)
-            pref_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(pref_path, 'w', encoding='utf-8') as f:
-                json.dump(self.user_preferences, f, ensure_ascii=False, indent=2)
-            logger.info(f"已保存用户偏好数据: {len(self.user_preferences)} 个用户")
-        except Exception as e:
-            logger.error(f"保存偏好数据失败: {e}")
+            client = Client(base_url)
+            yield client
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as e:
+                    logger.debug(f"关闭Gradio Client时出错: {e}")
 
     def _get_user_id(self, event: AstrMessageEvent) -> str:
         """获取用户唯一标识"""
@@ -176,14 +212,23 @@ class MusicPlugin(Star):
         if user_id not in self.user_preferences:
             self.user_preferences[user_id] = {
                 "default_api_type": self.default_api_type,
-                "default_model_index": self.default_model_index,
+                "default_model_index": max(1, self.default_model_index),
                 "default_key_shift": self.default_key_shift,
                 "favorite_songs": [],
                 "usage_count": 0,
                 "last_used_time": None,
-                "preferred_artists": []
+                "preferred_artists": {},
+                "artist_model_map": {}
             }
-        return self.user_preferences[user_id]
+        pref = self.user_preferences[user_id]
+        if isinstance(pref.get("preferred_artists"), list):
+            old_list = pref["preferred_artists"]
+            pref["preferred_artists"] = {a: {"count": 1, "last_time": None, "model": None} for a in old_list}
+        if "artist_model_map" not in pref:
+            pref["artist_model_map"] = {}
+        if pref.get("default_model_index", 0) < 1:
+            pref["default_model_index"] = max(1, self.default_model_index)
+        return pref
 
     async def _async_predict(self, client, *args, timeout=300, event=None, **kwargs):
         logger.debug(f"[UVR5 Debug] 传参: uvr5_agg={kwargs.get('uvr5_agg')}, uvr5_tta={kwargs.get('uvr5_tta')}, uvr5_postprocess={kwargs.get('uvr5_postprocess')}, uvr5_window_size={kwargs.get('uvr5_window_size')}, uvr5_high_end_process={kwargs.get('uvr5_high_end_process')}")
@@ -224,7 +269,7 @@ class MusicPlugin(Star):
                                 else:
                                     overall_pct = f" [{int(pct * 100)}%]" if pct is not None else ""
                                     msg = f"{self._get_stage_emoji(desc)} {desc}{overall_pct}"
-                                asyncio.create_task(event.send(event.plain_result(msg)))
+                                self._create_tracked_task(event.send(event.plain_result(msg)))
                                 last_msg_time = current_time
                                 last_desc = desc
                 except Exception as e:
@@ -315,13 +360,172 @@ class MusicPlugin(Star):
         
         return None
 
+    def _parse_gender_map(self, entries: list) -> Dict[str, str]:
+        result = {}
+        for entry in entries:
+            if not isinstance(entry, str) or ":" not in entry:
+                continue
+            parts = entry.split(":", 1)
+            name = parts[0].strip()
+            gender = parts[1].strip().lower()
+            if name and gender in ("male", "female"):
+                result[name] = gender
+        return result
+
+    def _detect_artist_gender(self, artist_name: str) -> Optional[str]:
+        if not artist_name:
+            return None
+        artist_lower = artist_name.strip().lower()
+        for mapped_name, gender in self.artist_gender_map.items():
+            if mapped_name.strip().lower() == artist_lower:
+                return gender
+        return None
+
+    async def _detect_artist_gender_llm(self, artist_name: str, event: AstrMessageEvent = None) -> Optional[str]:
+        if not artist_name:
+            return None
+        # 检查缓存
+        cache_key = f"artist:{artist_name.lower().strip()}"
+        if cache_key in self._gender_cache:
+            logger.info(f"自动升降调：歌手「{artist_name}」性别从缓存获取 → {self._gender_cache[cache_key]}")
+            return self._gender_cache[cache_key]
+        mapped = self._detect_artist_gender(artist_name)
+        if mapped:
+            self._gender_cache[cache_key] = mapped
+            logger.info(f"自动升降调：歌手「{artist_name}」在映射表中找到，性别={mapped}")
+            return mapped
+        try:
+            if event:
+                provider = self.context.get_using_provider(event.unified_msg_origin)
+            else:
+                provider = self.context.get_using_provider()
+            if not provider:
+                logger.warning(f"自动升降调：无法获取LLM provider（event={'有' if event else '无'}），跳过歌手性别判断")
+                return None
+            prompt = (
+                f"请判断歌手或组合「{artist_name}」的主唱性别。"
+                f"如果是组合，请判断主唱（唱主要部分的人）的性别。"
+                f"只回答'男'或'女'，不要回答其他任何内容。"
+            )
+            resp = await provider.text_chat(prompt=prompt)
+            if resp and resp.completion_text:
+                answer = resp.completion_text.strip()
+                logger.info(f"自动升降调：LLM判断歌手「{artist_name}」性别 → {answer}")
+                if "女" in answer:
+                    self._gender_cache[cache_key] = "female"
+                    return "female"
+                elif "男" in answer:
+                    self._gender_cache[cache_key] = "male"
+                    return "male"
+                else:
+                    prompt2 = (
+                        f"「{artist_name}」的主唱是男性还是女性？"
+                        f"只回答'男'或'女'。"
+                    )
+                    resp2 = await provider.text_chat(prompt=prompt2)
+                    if resp2 and resp2.completion_text:
+                        answer2 = resp2.completion_text.strip()
+                        logger.info(f"自动升降调：LLM二次判断歌手「{artist_name}」性别 → {answer2}")
+                        if "女" in answer2:
+                            self._gender_cache[cache_key] = "female"
+                            return "female"
+                        elif "男" in answer2:
+                            self._gender_cache[cache_key] = "male"
+                            return "male"
+            else:
+                logger.warning(f"自动升降调：LLM返回为空，无法判断歌手「{artist_name}」性别")
+        except Exception as e:
+            logger.error(f"LLM 判断歌手性别失败: {e}")
+        return None
+
+    def _detect_model_gender(self, model_display: str) -> Optional[str]:
+        if not model_display:
+            return None
+        model_lower = model_display.strip().lower()
+        for mapped_name, gender in self.model_gender_map.items():
+            if mapped_name.strip().lower() == model_lower:
+                logger.info(f"自动升降调：模型「{model_display}」在映射表中找到，性别={gender}")
+                return gender
+        return None
+
+    async def _detect_model_gender_llm(self, model_display: str, event: AstrMessageEvent = None) -> Optional[str]:
+        if not model_display:
+            return None
+        # 检查缓存
+        cache_key = f"model:{model_display.lower().strip()}"
+        if cache_key in self._gender_cache:
+            logger.info(f"自动升降调：模型「{model_display}」性别从缓存获取 → {self._gender_cache[cache_key]}")
+            return self._gender_cache[cache_key]
+        mapped = self._detect_model_gender(model_display)
+        if mapped:
+            self._gender_cache[cache_key] = mapped
+            return mapped
+        try:
+            if event:
+                provider = self.context.get_using_provider(event.unified_msg_origin)
+            else:
+                provider = self.context.get_using_provider()
+            if not provider:
+                logger.warning(f"自动升降调：无法获取LLM provider，跳过模型性别判断")
+                return None
+            prompt = (
+                f"AI语音模型「{model_display}」模拟的角色是男性还是女性？"
+                f"只回答'男'或'女'。"
+            )
+            resp = await provider.text_chat(prompt=prompt)
+            if resp and resp.completion_text:
+                answer = resp.completion_text.strip()
+                logger.info(f"自动升降调：LLM判断模型「{model_display}」性别 → {answer}")
+                if "女" in answer:
+                    self._gender_cache[cache_key] = "female"
+                    return "female"
+                elif "男" in answer:
+                    self._gender_cache[cache_key] = "male"
+                    return "male"
+            else:
+                logger.warning(f"自动升降调：LLM返回为空，无法判断模型「{model_display}」性别")
+        except Exception as e:
+            logger.error(f"LLM 判断模型性别失败: {e}")
+        return None
+
+    async def _calc_auto_key_shift(self, artist_name: str, model_display: str, user_key_shift: int, artist_gender: Optional[str] = None, model_gender: Optional[str] = None, event: AstrMessageEvent = None) -> int:
+        if not self.enable_auto_key_shift:
+            return user_key_shift
+        if user_key_shift != 0:
+            return user_key_shift
+
+        if not artist_gender:
+            artist_gender = await self._detect_artist_gender_llm(artist_name, event)
+        if not model_gender:
+            model_gender = await self._detect_model_gender_llm(model_display, event)
+
+        if not artist_gender or not model_gender:
+            logger.info(f"自动升降调：无法确定性别（歌手={artist_gender}, 模型={model_gender}），跳过")
+            return user_key_shift
+
+        if artist_gender == model_gender:
+            logger.info(f"自动升降调：歌手和模型性别相同（{artist_gender}），无需调整")
+            return user_key_shift
+
+        if model_gender == "female" and artist_gender == "male":
+            auto_shift = self.male_to_female_shift
+            logger.info(f"自动升降调：男→女，升调 {auto_shift}")
+            return auto_shift
+        elif model_gender == "male" and artist_gender == "female":
+            auto_shift = self.female_to_male_shift
+            logger.info(f"自动升降调：女→男，降调 {auto_shift}")
+            return auto_shift
+
+        return user_key_shift
+
     async def _update_models_from_api(self, api_type="rvc"):
         base_url = self.svc_base_url if api_type == "svc" else self.rvc_base_url
-        client = Client(base_url)
-        try:
-            model_list_from_api = await self._async_predict(client, api_name="/show_model")
-        except Exception:
-            model_list_from_api = await self._async_predict(client, api_name="/show_model")
+        async with self._get_gradio_client(base_url) as client:
+            try:
+                model_list_from_api = await self._async_predict(client, api_name="/show_model")
+            except Exception as e:
+                logger.warning(f"第一次获取模型列表失败，重试中: {e}")
+                model_list_from_api = await self._async_predict(client, api_name="/show_model")
 
         if not isinstance(model_list_from_api, list):
             raise ValueError(f"获取模型列表失败: {model_list_from_api}")
@@ -698,7 +902,6 @@ class MusicPlugin(Star):
         song_name = song.get("name", "翻唱")
         try:
             base_url = self.svc_base_url if api_type == "svc" else self.rvc_base_url
-            client = Client(base_url)
             
             # 判断是否为QQ音乐歌曲（通过songmid字段判断）
             is_qq_music = "songmid" in song and song.get("songmid")
@@ -715,7 +918,9 @@ class MusicPlugin(Star):
                     audio_url = await qq_api.fetch_song_url(songmid, song_name=song_name)
                     
                     if not audio_url:
-                        await event.send(event.plain_result("❌ 无法获取QQ音乐播放链接，请稍后重试。"))
+                        error_msg = f"❌ QQ音乐源获取失败: 无法获取《{song_name}》的播放链接。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API限制 3) 网络问题。建议换一首歌或稍后再试。"
+                        logger.error(error_msg)
+                        await event.send(event.plain_result(error_msg))
                         return
                     
                     # 下载到本地临时文件（使用英文文件名）
@@ -730,7 +935,9 @@ class MusicPlugin(Star):
                                     async for chunk in resp.content.iter_chunked(8192):
                                         f.write(chunk)
                             else:
-                                await event.send(event.plain_result(f"❌ 下载QQ音乐失败 (HTTP {resp.status})"))
+                                error_msg = f"❌ QQ音乐下载失败 (HTTP {resp.status})。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API限制 3) 网络问题。建议换一首歌或稍后再试。"
+                                logger.error(error_msg)
+                                await event.send(event.plain_result(error_msg))
                                 return
                     
                     # 使用本地文件路径
@@ -743,28 +950,29 @@ class MusicPlugin(Star):
                 if isinstance(song.get("id"), int) or (isinstance(song.get("id"), str) and song["id"].isdigit()):
                     song_input = str(song["id"])
             
-            result_path = await self._async_predict(
-                client,
-                song_name_src=song_input,
-                key_shift=key_shift,
-                vocal_vol=0,
-                inst_vol=0,
-                model_dropdown=model_name,
-                reverb_intensity=self.reverb_intensity,
-                delay_intensity=self.delay_intensity,
-                **({"svc_f0_method": self.svc_f0_method} if api_type == "svc" else {"f0_method": self.f0_method, "index_rate": self.index_rate, "filter_radius": self.filter_radius}),
-                uvr5_agg=self.uvr5_agg,
-                uvr5_tta=self.uvr5_tta,
-                uvr5_postprocess=self.uvr5_postprocess,
-                uvr5_window_size=self.uvr5_window_size,
-                uvr5_high_end_process=self.uvr5_high_end_process,
-                msst_batch_size=self.msst_batch_size,
-                msst_num_overlap=self.msst_num_overlap,
-                msst_normalize=self.msst_normalize,
-                api_name="/convert",
-                timeout=self.inference_timeout,
-                event=event
-            )
+            async with self._get_gradio_client(base_url) as client:
+                result_path = await self._async_predict(
+                    client,
+                    song_name_src=song_input,
+                    key_shift=key_shift,
+                    vocal_vol=0,
+                    inst_vol=0,
+                    model_dropdown=model_name,
+                    reverb_intensity=self.reverb_intensity,
+                    delay_intensity=self.delay_intensity,
+                    **({"svc_f0_method": self.svc_f0_method} if api_type == "svc" else {"f0_method": self.f0_method, "index_rate": self.index_rate, "filter_radius": self.filter_radius}),
+                    uvr5_agg=self.uvr5_agg,
+                    uvr5_tta=self.uvr5_tta,
+                    uvr5_postprocess=self.uvr5_postprocess,
+                    uvr5_window_size=self.uvr5_window_size,
+                    uvr5_high_end_process=self.uvr5_high_end_process,
+                    msst_batch_size=self.msst_batch_size,
+                    msst_num_overlap=self.msst_num_overlap,
+                    msst_normalize=self.msst_normalize,
+                    api_name="/convert",
+                    timeout=self.inference_timeout,
+                    event=event
+                )
             if result_path and os.path.exists(result_path):
                 await self._send_cover_result(event, result_path, song_name=song_name)
             else:
@@ -825,6 +1033,8 @@ class MusicPlugin(Star):
             songs = await api_to_use.fetch_data(keyword=keyword, limit=limit)
             
             if not songs:
+                if platform_name == "QQ音乐":
+                    return f"❌ 在QQ音乐未找到与 '{keyword}' 相关的歌曲。可能原因：1) QQ音乐API连接失败 2) 该歌曲不存在于QQ音乐 3) 网络问题。建议尝试用网易云音乐搜索（platform='netease'）或换一首歌名。"
                 return f"在{platform_name}未找到与 '{keyword}' 相关的歌曲。"
             
             if self.enable_enhanced_context:
@@ -903,7 +1113,7 @@ class MusicPlugin(Star):
         
         search_query = f"{song_name} {artist_name}" if artist_name else song_name
         
-        asyncio.create_task(self._smart_cover_async(
+        self._create_tracked_task(self._smart_cover_async(
             event, search_query, "rvc", model_index, key_shift, model_display, actual_music_source
         ))
         return f"🎵 正在从【{source_display}】用RVC模型【{model_display}】翻唱《{song_name}》... 请稍等，音频生成后会自动发送！"
@@ -951,7 +1161,7 @@ class MusicPlugin(Star):
         
         search_query = f"{song_name} {artist_name}" if artist_name else song_name
         
-        asyncio.create_task(self._smart_cover_async(
+        self._create_tracked_task(self._smart_cover_async(
             event, search_query, "svc", model_index, key_shift, model_display, actual_music_source
         ))
         return f"🎵 正在从【{source_display}】用SVC模型【{model_display}】翻唱《{song_name}》... 请稍等，音频生成后会自动发送！"
@@ -1028,6 +1238,22 @@ class MusicPlugin(Star):
             _, keys = self.get_models_display_list(api_type=api_type)
             selected_model = keys[model_index - 1]
             
+            # === 自动升降调 ===
+            models_info = self.get_models_detailed_list(api_type)
+            model_display = ""
+            for m in models_info:
+                if m["index"] == model_index:
+                    model_display = m["display"]
+                    break
+            
+            original_key_shift = key_shift
+            artist_from_song = selected_song.get("artists", "")
+            artist_gender = await self._detect_artist_gender_llm(artist_from_song, event) if self.enable_auto_key_shift and key_shift == 0 else None
+            model_gender = await self._detect_model_gender_llm(model_display, event) if self.enable_auto_key_shift and key_shift == 0 else None
+            key_shift = await self._calc_auto_key_shift(artist_from_song, model_display, key_shift, artist_gender, model_gender, event)
+            if key_shift != original_key_shift and self.enable_auto_key_shift:
+                logger.info(f"自动升降调：{artist_from_song} → {model_display}，音调从 {original_key_shift:+d} 调整为 {key_shift:+d}")
+            
             # === QQ音乐：先下载音频到本地文件 ===
             song_input_for_api = str(selected_song["id"])
             temp_audio_file = None
@@ -1043,7 +1269,9 @@ class MusicPlugin(Star):
                     audio_url = await qq_api.fetch_song_url(songmid, song_display_name)
                     
                     if not audio_url:
-                        return f"❌ 无法获取QQ音乐播放链接: {song_display_name}"
+                        error_msg = f"❌ QQ音乐源获取失败: 无法获取《{song_display_name}》的播放链接。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API限制 3) 网络问题。建议换一首歌或稍后再试。"
+                        logger.error(error_msg)
+                        return error_msg
                     
                     import aiohttp
                     temp_dir = os.path.join(os.path.dirname(__file__), "temp_audio")
@@ -1059,43 +1287,48 @@ class MusicPlugin(Star):
                                         f.write(chunk)
                                 logger.info(f"QQ音乐: 下载完成，文件大小: {os.path.getsize(temp_audio_file)} bytes")
                             else:
-                                return f"❌ QQ音乐下载失败: HTTP {resp.status}"
+                                error_msg = f"❌ QQ音乐下载失败: HTTP {resp.status}。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API限制 3) 网络问题。建议换一首歌或稍后再试。"
+                                logger.error(error_msg)
+                                return error_msg
                     
                     song_input_for_api = temp_audio_file
                     
                 except Exception as e:
                     logger.error(f"QQ音乐下载失败: {traceback.format_exc()}")
-                    return f"❌ QQ音乐处理失败: {e}"
+                    return f"❌ QQ音乐源获取失败: {e}。建议换一首歌或稍后再试。"
             
             base_url = self.rvc_base_url if api_type == "rvc" else self.svc_base_url
-            client = Client(base_url)
-            result_path = await self._async_predict(
-                client,
-                song_name_src=song_input_for_api,
-                key_shift=key_shift,
-                vocal_vol=0,
-                inst_vol=0,
-                model_dropdown=selected_model,
-                reverb_intensity=self.reverb_intensity,
-                delay_intensity=self.delay_intensity,
-                **({"svc_f0_method": self.svc_f0_method} if api_type == "svc" else {"f0_method": self.f0_method, "index_rate": self.index_rate, "filter_radius": self.filter_radius}),
-                uvr5_agg=self.uvr5_agg,
-                uvr5_tta=self.uvr5_tta,
-                uvr5_postprocess=self.uvr5_postprocess,
-                uvr5_window_size=self.uvr5_window_size,
-                uvr5_high_end_process=self.uvr5_high_end_process,
-                msst_batch_size=self.msst_batch_size,
-                msst_num_overlap=self.msst_num_overlap,
-                msst_normalize=self.msst_normalize,
-                api_name="/convert",
-                timeout=self.inference_timeout,
-                event=event
-            )
+            async with self._get_gradio_client(base_url) as client:
+                result_path = await self._async_predict(
+                    client,
+                    song_name_src=song_input_for_api,
+                    key_shift=key_shift,
+                    vocal_vol=0,
+                    inst_vol=0,
+                    model_dropdown=selected_model,
+                    reverb_intensity=self.reverb_intensity,
+                    delay_intensity=self.delay_intensity,
+                    **({"svc_f0_method": self.svc_f0_method} if api_type == "svc" else {"f0_method": self.f0_method, "index_rate": self.index_rate, "filter_radius": self.filter_radius}),
+                    uvr5_agg=self.uvr5_agg,
+                    uvr5_tta=self.uvr5_tta,
+                    uvr5_postprocess=self.uvr5_postprocess,
+                    uvr5_window_size=self.uvr5_window_size,
+                    uvr5_high_end_process=self.uvr5_high_end_process,
+                    msst_batch_size=self.msst_batch_size,
+                    msst_num_overlap=self.msst_num_overlap,
+                    msst_normalize=self.msst_normalize,
+                    api_name="/convert",
+                    timeout=self.inference_timeout,
+                    event=event
+                )
             
             if result_path and os.path.exists(result_path):
                 await self._send_cover_result(event, result_path, song_name=selected_song.get('name', song_name))
                 song_artist = selected_song.get('artists', '未知艺人')
                 result_msg = f"已成功使用 {api_type.upper()} 模型【{selected_model}】生成《{selected_song['name']}》({song_artist}) 的翻唱版本！音频文件已发送。"
+                if key_shift != original_key_shift and self.enable_auto_key_shift:
+                    gender_label = {"male": "男", "female": "女"}.get
+                    result_msg += f"\n🎵 自动升降调：{song_artist}({gender_label(artist_gender, '?')}) → {model_display}({gender_label(model_gender, '?')})，音调 {original_key_shift:+d} → {key_shift:+d}"
             else:
                 result_msg = "生成失败，后端未返回有效文件路径。"
                 
@@ -1118,18 +1351,32 @@ class MusicPlugin(Star):
                 pref["last_used_model"] = selected_model
                 pref["last_used_api_type"] = api_type
                 
-                if selected_song['name'] not in pref["favorite_songs"]:
-                    pref["favorite_songs"].append(selected_song['name'])
-                    if len(pref["favorite_songs"]) > 20:
-                        pref["favorite_songs"] = pref["favorite_songs"][-20:]
+                song_entry = f"{selected_song['name']} - {selected_song['artists']}"
+                existing = [s for s in pref["favorite_songs"] if s.split(" - ")[0] == selected_song['name']]
+                if not existing:
+                    pref["favorite_songs"].append(song_entry)
+                    if len(pref["favorite_songs"]) > 30:
+                        pref["favorite_songs"] = pref["favorite_songs"][-30:]
                 
                 artist = selected_song['artists'].split(',')[0].strip() if ',' in selected_song['artists'] else selected_song['artists']
-                if artist not in pref["preferred_artists"]:
-                    pref["preferred_artists"].append(artist)
-                    if len(pref["preferred_artists"]) > 10:
-                        pref["preferred_artists"] = pref["preferred_artists"][-10:]
+                artists_dict = pref.get("preferred_artists", {})
+                if artist not in artists_dict:
+                    artists_dict[artist] = {"count": 0, "last_time": None, "model": None}
+                artists_dict[artist]["count"] += 1
+                artists_dict[artist]["last_time"] = datetime.now().isoformat()
+                artists_dict[artist]["model"] = selected_model
+                pref["preferred_artists"] = artists_dict
                 
-                self._save_preferences()
+                artist_model_map = pref.get("artist_model_map", {})
+                if artist not in artist_model_map:
+                    artist_model_map[artist] = {}
+                model_key = selected_model
+                if model_key not in artist_model_map[artist]:
+                    artist_model_map[artist][model_key] = 0
+                artist_model_map[artist][model_key] += 1
+                pref["artist_model_map"] = artist_model_map
+                
+                await self._save_preferences()
             
             return result_msg
                 
@@ -1292,57 +1539,98 @@ class MusicPlugin(Star):
                 
                 if key_shift is None and pref.get("default_key_shift") is not None:
                     actual_key_shift = pref["default_key_shift"]
+                
+                if artist_name and not model_name and not model_index:
+                    artist_model_map = pref.get("artist_model_map", {})
+                    if artist_name in artist_model_map:
+                        model_counts = artist_model_map[artist_name]
+                        if model_counts:
+                            best_model = max(model_counts, key=model_counts.get)
+                            models_info_tmp = self.get_models_detailed_list(actual_api_type)
+                            for m in models_info_tmp:
+                                if m["filename"] == best_model or m["display"] == best_model:
+                                    actual_model_index = m["index"]
+                                    break
             
             models_info = self.get_models_detailed_list(actual_api_type)
             actual_model_display = ""
+            artist_pref_hint = ""
             for m in models_info:
                 if m["index"] == actual_model_index:
                     actual_model_display = m["display"]
                     break
             
+            if self.enable_preference_learning and artist_name and not model_name and not model_index:
+                artist_model_map = pref.get("artist_model_map", {})
+                if artist_name in artist_model_map:
+                    model_counts = artist_model_map[artist_name]
+                    best_model = max(model_counts, key=model_counts.get)
+                    for m in models_info:
+                        if (m["filename"] == best_model or m["display"] == best_model) and m["index"] == actual_model_index:
+                            artist_pref_hint = f"\n💡 已自动为您选择翻唱{artist_name}时最常用的模型"
+                            break
+            
             source_display = "QQ音乐" if actual_music_source == "qqmusic" else ("网易云" if actual_music_source in ["netease", "netease_nodejs"] else actual_music_source)
             
             search_query = f"{song_name} {artist_name}" if artist_name else song_name
             
-            asyncio.create_task(self._smart_cover_async(
+            self._create_tracked_task(self._smart_cover_async(
                 event, search_query, actual_api_type, actual_model_index, 
                 actual_key_shift, actual_model_display, actual_music_source
             ))
             
-            return f"🎵 正在从【{source_display}】用【{actual_model_display}】翻唱《{song_name}》... 请稍等，音频生成后会自动发送！"
+            return f"🎵 正在从【{source_display}】用【{actual_model_display}】翻唱《{song_name}》... 请稍等，音频生成后会自动发送！{artist_pref_hint}"
             
         except Exception as e:
             logger.error(traceback.format_exc())
             return f"智能翻唱出错: {e}"
 
-    async def _smart_cover_async(self, event: AstrMessageEvent, song_name: str, 
+    async def _smart_cover_async(self, event: AstrMessageEvent, song_name: str,
                                  api_type: str, model_index: int, key_shift: int,
                                  model_display: str, music_source: str = None):
         """smart_cover 异步执行函数"""
         try:
             result = await self._do_cover(event, song_name, api_type, model_index, key_shift, music_source)
-            
+
+            # 检查是否失败（返回字符串以❌开头表示失败）
+            is_failed = result.startswith("❌") or "失败" in result or "错误" in result or "超时" in result
+
             if self.enable_config_report:
                 source_info = f", 音乐源={music_source}" if music_source else ""
-                result += f"\n\n📊 本次配置：类型={api_type.upper()}, 模型={model_display}, 调音={key_shift:+d}{source_info}"
+                if not is_failed:
+                    result += f"\n\n📊 本次配置：类型={api_type.upper()}, 模型={model_display}, 调音={key_shift:+d}{source_info}"
                 await event.send(event.plain_result(result))
-            
-            # === LLM 成功通知机制 ===
-            if getattr(self, "enable_llm_success_notify", True) and "已成功" in result:
+
+            # === LLM 通知机制 ===
+            if getattr(self, "enable_llm_success_notify", True):
                 try:
                     provider = self.context.get_using_provider(event.unified_msg_origin)
                     if provider:
-                        prompt = f"系统通知：刚才用户要求翻唱的歌曲（{song_name}）已经由后台处理完成，并且音频已经发送给用户了！请用你当前的人设（简短、可爱或符合角色的语气）直接告诉用户这个好消息（不要包含系统通知字样）。"
+                        if is_failed:
+                            # 失败时通知AI告知用户失败原因
+                            prompt = f"系统通知：刚才用户要求翻唱的歌曲（{song_name}）处理失败了！失败原因：{result}。请用你当前的人设（简短、可爱或符合角色的语气）直接告诉用户这个坏消息，并建议用户重试或换一首歌（不要包含系统通知字样）。"
+                        else:
+                            # 成功时通知AI告知用户完成
+                            prompt = f"系统通知：刚才用户要求翻唱的歌曲（{song_name}）已经由后台处理完成，并且音频已经发送给用户了！请用你当前的人设（简短、可爱或符合角色的语气）直接告诉用户这个好消息（不要包含系统通知字样）。"
                         llm_resp = await provider.text_chat(prompt=prompt)
                         if llm_resp and llm_resp.completion_text:
                             await event.send(event.plain_result(llm_resp.completion_text))
                 except Exception as llm_e:
                     logger.error(f"通知 LLM 失败: {llm_e}")
-            
+
         except Exception as e:
             logger.error(f"smart_cover 异步执行失败: {traceback.format_exc()}")
             try:
-                await event.send(event.plain_result(f"❌ 翻唱失败: {e}"))
+                error_msg = f"❌ 翻唱失败: {e}"
+                await event.send(event.plain_result(error_msg))
+                # 异常时也通知AI
+                if getattr(self, "enable_llm_success_notify", True):
+                    provider = self.context.get_using_provider(event.unified_msg_origin)
+                    if provider:
+                        prompt = f"系统通知：刚才用户要求翻唱的歌曲（{song_name}）处理时发生异常错误！请用你当前的人设（简短、可爱或符合角色的语气）告诉用户翻唱出错了，建议稍后再试（不要包含系统通知字样）。"
+                        llm_resp = await provider.text_chat(prompt=prompt)
+                        if llm_resp and llm_resp.completion_text:
+                            await event.send(event.plain_result(llm_resp.completion_text))
             except:
                 pass
 
@@ -1483,7 +1771,7 @@ class MusicPlugin(Star):
                 actual_music_source = "qqmusic"
                 
             # === 创建后台任务（异步执行）===
-            asyncio.create_task(
+            self._create_tracked_task(
                 self._execute_batch_cover_async(
                     event=event,
                     songs=songs,
@@ -1659,7 +1947,7 @@ class MusicPlugin(Star):
                 return f"值太大: {converted_value}，最大值为 {type_info['max']}"
             
             pref[f"default_{preference_type}"] = converted_value
-            self._save_preferences()
+            await self._save_preferences()
             
             type_display = {
                 "api_type": f"默认翻唱类型 → {'RVC' if converted_value == 'rvc' else 'SVC'}",
@@ -1730,22 +2018,43 @@ class MusicPlugin(Star):
                 for song in recent_favorites:
                     recommendation.append(f"   - 《{song}》")
             
-            # === 偏好歌手 ===
-            preferred_artists = pref.get("preferred_artists", [])
+            # === 偏好歌手（按频率排序）===
+            preferred_artists = pref.get("preferred_artists", {})
             if preferred_artists:
-                recommendation.append(f"\n🎤 您偏爱的歌手：")
-                for artist in preferred_artists[-3:]:
-                    recommendation.append(f"   - {artist}")
+                sorted_artists = sorted(preferred_artists.items(), key=lambda x: x[1].get("count", 0), reverse=True)
+                recommendation.append(f"\n🎤 您偏爱的歌手（按频率排序）：")
+                for artist, info in sorted_artists[:5]:
+                    model_info = f", 常用模型: {info.get('model', '未知')}" if info.get('model') else ""
+                    recommendation.append(f"   - {artist} ({info.get('count', 0)}次{model_info})")
+            
+            # === 歌手→模型映射 ===
+            artist_model_map = pref.get("artist_model_map", {})
+            if artist_model_map:
+                recommendation.append(f"\n🔗 歌手专属模型映射：")
+                for artist, models in sorted(artist_model_map.items()):
+                    best = max(models, key=models.get)
+                    recommendation.append(f"   - {artist} → {best} ({models[best]}次)")
             
             # === 结合当前歌曲的建议 ===
             if song_name:
                 recommendation.append(f"\n🎯 针对《{song_name}》的建议：")
                 
-                if any(artist in song_name for artist in preferred_artists):
-                    recommendation.append(f"   ✨ 检测到这是您偏爱的歌手的作品！")
-                    recommendation.append(f"   💡 建议使用您常用的配置进行翻唱。")
+                matched_artist = None
+                for artist in preferred_artists:
+                    if artist and artist in song_name:
+                        matched_artist = artist
+                        break
                 
-                if song_name in favorite_songs:
+                if matched_artist:
+                    recommendation.append(f"   ✨ 检测到这是您偏爱的歌手 {matched_artist} 的作品！")
+                    if matched_artist in artist_model_map:
+                        best_model = max(artist_model_map[matched_artist], key=artist_model_map[matched_artist].get)
+                        recommendation.append(f"   💡 建议使用模型 {best_model}（您翻唱此歌手时最常用）")
+                    else:
+                        recommendation.append(f"   💡 建议使用您常用的配置进行翻唱。")
+                
+                song_names = [s.split(" - ")[0] for s in favorite_songs]
+                if song_name in song_names:
                     recommendation.append(f"   🔄 这首歌您之前翻唱过！")
                     recommendation.append(f"   💡 是否想尝试不同的模型或音调？")
             
@@ -1816,13 +2125,23 @@ class MusicPlugin(Star):
                 stats.append(f"\n❤️ 收藏歌曲：暂无")
             
             # === 偏爱歌手 ===
-            preferred_artists = pref.get("preferred_artists", [])
+            preferred_artists = pref.get("preferred_artists", {})
             if preferred_artists:
-                stats.append(f"\n🎤 偏爱歌手：")
-                for artist in preferred_artists:
-                    stats.append(f"   • {artist}")
+                sorted_artists = sorted(preferred_artists.items(), key=lambda x: x[1].get("count", 0), reverse=True)
+                stats.append(f"\n🎤 偏爱歌手（按频率排序）：")
+                for artist, info in sorted_artists[:10]:
+                    model_info = f", 常用: {info.get('model', '未知')}" if info.get('model') else ""
+                    stats.append(f"   • {artist} - {info.get('count', 0)}次{model_info}")
             else:
                 stats.append(f"\n🎤 偏爱歌手：暂无")
+            
+            # === 歌手→模型映射 ===
+            artist_model_map = pref.get("artist_model_map", {})
+            if artist_model_map:
+                stats.append(f"\n🔗 歌手专属模型映射：")
+                for artist, models in sorted(artist_model_map.items()):
+                    best = max(models, key=models.get)
+                    stats.append(f"   • {artist} → {best} ({models[best]}次)")
             
             # === 操作建议 ===
             stats.append(f"\n" + "-" * 60)
@@ -1860,7 +2179,7 @@ class MusicPlugin(Star):
                 return "没有找到您的任何历史数据。"
             
             del self.user_preferences[user_id]
-            self._save_preferences()
+            await self._save_preferences()
             
             return "✅ 已清除您的所有翻唱历史和偏好数据！\n\n包括：\n• 使用统计\n• 偏好设置\n• 收藏歌曲\n• 偏爱歌手记录\n\n下次使用时将从零开始重新学习您的喜好。"
             
@@ -1877,3 +2196,38 @@ class MusicPlugin(Star):
             return
         result = await self.view_my_stats(event)
         yield event.plain_result(result)
+    
+    async def terminate(self):
+        """插件卸载时清理资源"""
+        logger.info("[MatsukoCover] 正在清理资源...")
+        
+        # 取消所有待处理的任务
+        if hasattr(self, '_pending_tasks') and self._pending_tasks:
+            for task in list(self._pending_tasks):
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await asyncio.wait_for(task, timeout=2)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
+            self._pending_tasks.clear()
+        
+        # 保存偏好数据
+        try:
+            if hasattr(self, '_pref_lock') and self.enable_preference_learning:
+                async with self._pref_lock:
+                    pref_path = Path(self.preference_storage_path)
+                    pref_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(pref_path, 'w', encoding='utf-8') as f:
+                        json.dump(self.user_preferences, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[MatsukoCover] 卸载时保存偏好失败: {e}")
+        
+        # 清理API session
+        try:
+            if hasattr(self, 'api') and self.api:
+                await self.api.close()
+        except Exception as e:
+            logger.debug(f"[MatsukoCover] 关闭API session: {e}")
+        
+        logger.info("[MatsukoCover] 资源清理完成")

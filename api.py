@@ -27,7 +27,13 @@ class NetEaseMusicAPI:
         }
         self.headers = {"referer": "http://music.163.com"}
         self.cookies = {"appver": "2.0.2"}
-        self.session = aiohttp.ClientSession()
+        self._session = None
+    
+    @property
+    def session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     async def _request(
         self,
@@ -105,7 +111,13 @@ class NetEaseMusicAPINodeJs:
     def __init__(self, base_url:str):
         # http://netease_cloud_music_api:{port}/
         self.base_url = base_url
-        self.session = aiohttp.ClientSession(base_url)
+        self._session = None
+    
+    @property
+    def session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(self.base_url)
+        return self._session
 
     async def _request(self, url: str, data: dict = {}, method: str = "GET"):
         if method.upper() == "POST":
@@ -381,7 +393,13 @@ class MusicSearcher:
             "Accept": "application/json, text/javascript, */*; q=0.01",
             "X-Requested-With": "XMLHttpRequest",
         }
-        self.session = aiohttp.ClientSession()
+        self._session = None
+    
+    @property
+    def session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
     async def fetch_data(self, song_name: str, platform_type: str, limit: int = 5):
         """
         向音乐接口发送 POST 请求以获取歌曲数据

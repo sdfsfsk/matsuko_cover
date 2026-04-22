@@ -268,5 +268,39 @@
     "type": "bool",
     "hint": "开启后，翻唱完成时会额外发送一条包含本次翻唱配置的消息（如：📊 本次配置：类型=RVC, 模型=塔菲, 调音=+0）。关闭则只发送音频不发送配置报告。",
     "default": true
+  },
+  "enable_auto_key_shift": {
+    "description": "启用自动升降调（根据原曲歌手与模型性别自动调整音调）",
+    "type": "bool",
+    "hint": "开启后，当用户未手动指定升降调时，插件会自动识别原曲歌手性别和模型性别，性别不同时自动应用升降调。例如：男歌手的歌用女声模型翻唱时自动升调，女歌手的歌用男声模型翻唱时自动降调。手动指定了升降调值时不会覆盖。",
+    "default": false
+  },
+  "male_to_female_shift": {
+    "description": "男→女 升调值（半音数）",
+    "type": "int",
+    "hint": "当原曲歌手为男、模型为女声时自动升调的半音数。RVC官方推荐+12，可根据实际效果调整（如+8更保守）。",
+    "default": 12,
+    "minimum": -24,
+    "maximum": 24
+  },
+  "female_to_male_shift": {
+    "description": "女→男 降调值（半音数）",
+    "type": "int",
+    "hint": "当原曲歌手为女、模型为男声时自动降调的半音数。RVC官方推荐-12，可根据实际效果调整（如-8更保守）。",
+    "default": -12,
+    "minimum": -24,
+    "maximum": 24
+  },
+  "artist_gender_map": {
+    "description": "歌手性别映射表",
+    "type": "list",
+    "hint": "手动指定歌手的性别，每行一个，格式为 '歌手名:male' 或 '歌手名:female'。例如：周杰伦:male、邓紫棋:female、Taylor Swift:female。映射表优先级最高，未在此表中的歌手会由LLM自动判断性别。",
+    "default": []
+  },
+  "model_gender_map": {
+    "description": "模型性别映射表",
+    "type": "list",
+    "hint": "手动指定模型的性别，每行一个，格式为 '模型别名:male' 或 '模型别名:female'。例如：塔菲:female、派蒙:female、某男声模型:male。模型别名需与 rvc_models_keywords/svc_models_keywords 中的别名一致。未在此表中的模型无法自动升降调。",
+    "default": []
   }
 }
