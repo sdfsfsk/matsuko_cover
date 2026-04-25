@@ -1,10 +1,8 @@
 from pathlib import Path
 import os
 import re
-
-# === 新增：防止系统代理拦截本地请求 ===
-os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
-os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
+import uuid
+import time
 
 import asyncio
 import shutil
@@ -33,8 +31,8 @@ MODEL_ALIAS_SEPARATOR = "|||"
 @register(
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
-    "RVC/SVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈）",
-    "2.5.4",
+    "RVC/SVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈、QQ音乐风控自动重试）",
+    "2.5.5",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
@@ -49,6 +47,8 @@ class MusicPlugin(Star):
         self.nodejs_base_url = config.get("nodejs_base_url", "https://163api.qijieya.cn")
         self.qqmusic_api_url = config.get("qqmusic_api_url", "http://127.0.0.1:3300")
         self.enable_qqmusic = config.get("enable_qqmusic", True)
+        self.qqmusic_retry_on_ratelimit = config.get("qqmusic_retry_on_ratelimit", True)
+        self.qqmusic_retry_max_attempts = config.get("qqmusic_retry_max_attempts", 3)
         self.disable_netease = config.get("disable_netease", False)
         self.timeout = config.get("timeout", 60)
         
@@ -72,7 +72,8 @@ class MusicPlugin(Star):
                 logger.warning("QQ音乐功能未启用，但default_api设置为qqmusic，已自动启用")
                 self.enable_qqmusic = True
             from .api import QQMusicAPI
-            self.api = QQMusicAPI()
+            api_key = config.get("third_party_api_key", "")
+            self.api = QQMusicAPI(api_key=api_key)
         else:
             logger.warning(f"未知的音乐API类型: {self.default_api}，使用默认的 netease_nodejs")
             from .api import NetEaseMusicAPINodeJs
@@ -97,7 +98,11 @@ class MusicPlugin(Star):
         self.default_key_shift = config.get("default_key_shift", 0)
         self.f0_method = config.get("f0_method", "rmvpe")
         self.svc_f0_method = config.get("svc_f0_method", "fcpe")
-        self.index_rate = float(config.get("index_rate", "0.75"))
+        try:
+            self.index_rate = float(config.get("index_rate", "0.75"))
+        except (ValueError, TypeError):
+            logger.warning("index_rate 配置格式错误，使用默认值 0.75")
+            self.index_rate = 0.75
         self.filter_radius = config.get("filter_radius", 3)
         self.reverb_intensity = config.get("reverb_intensity", 4)
         self.delay_intensity = config.get("delay_intensity", 0)
@@ -131,8 +136,12 @@ class MusicPlugin(Star):
         # === 异步任务追踪 ===
         self._pending_tasks: Set[asyncio.Task] = set()
         
+        # === 清理旧临时文件 ===
+        self._cleanup_old_temp_files()
+        
         # === 性别识别缓存 ===
         self._gender_cache: Dict[str, str] = {}
+        self._gender_cache_max_size = 100
 
     async def _send_cover_result(self, event: AstrMessageEvent, result_path: str, song_name: str = "翻唱"):
         if not result_path or not os.path.exists(result_path):
@@ -182,11 +191,34 @@ class MusicPlugin(Star):
             except Exception as e:
                 logger.error(f"保存偏好数据失败: {e}")
     
+    def _cleanup_old_temp_files(self):
+        """清理超过24小时的旧临时文件"""
+        try:
+            temp_dir = os.path.join(os.path.dirname(__file__), "temp_audio")
+            if not os.path.isdir(temp_dir):
+                return
+            now = time.time()
+            for fname in os.listdir(temp_dir):
+                fpath = os.path.join(temp_dir, fname)
+                if os.path.isfile(fpath) and now - os.path.getmtime(fpath) > 86400:
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+        except Exception as e:
+            logger.debug(f"清理旧临时文件失败: {e}")
+
     def _create_tracked_task(self, coro) -> asyncio.Task:
         """创建被追踪的异步任务，防止任务丢失和异常静默"""
         task = asyncio.create_task(coro)
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
+
+        def _log_exception(t: asyncio.Task):
+            if not t.cancelled() and t.exception() is not None:
+                logger.error(f"[MatsukoCover] 异步任务异常: {t.exception()}", exc_info=t.exception())
+
+        task.add_done_callback(_log_exception)
         return task
     
     @asynccontextmanager
@@ -372,6 +404,14 @@ class MusicPlugin(Star):
                 result[name] = gender
         return result
 
+    def _add_to_gender_cache(self, cache_key: str, value: str):
+        """安全地写入性别缓存，防止无限增长"""
+        if len(self._gender_cache) >= self._gender_cache_max_size:
+            keys_to_remove = list(self._gender_cache.keys())[:self._gender_cache_max_size // 2]
+            for k in keys_to_remove:
+                del self._gender_cache[k]
+        self._gender_cache[cache_key] = value
+
     def _detect_artist_gender(self, artist_name: str) -> Optional[str]:
         if not artist_name:
             return None
@@ -391,7 +431,7 @@ class MusicPlugin(Star):
             return self._gender_cache[cache_key]
         mapped = self._detect_artist_gender(artist_name)
         if mapped:
-            self._gender_cache[cache_key] = mapped
+            self._add_to_gender_cache(cache_key, mapped)
             logger.info(f"自动升降调：歌手「{artist_name}」在映射表中找到，性别={mapped}")
             return mapped
         try:
@@ -412,10 +452,10 @@ class MusicPlugin(Star):
                 answer = resp.completion_text.strip()
                 logger.info(f"自动升降调：LLM判断歌手「{artist_name}」性别 → {answer}")
                 if "女" in answer:
-                    self._gender_cache[cache_key] = "female"
+                    self._add_to_gender_cache(cache_key, "female")
                     return "female"
                 elif "男" in answer:
-                    self._gender_cache[cache_key] = "male"
+                    self._add_to_gender_cache(cache_key, "male")
                     return "male"
                 else:
                     prompt2 = (
@@ -427,10 +467,10 @@ class MusicPlugin(Star):
                         answer2 = resp2.completion_text.strip()
                         logger.info(f"自动升降调：LLM二次判断歌手「{artist_name}」性别 → {answer2}")
                         if "女" in answer2:
-                            self._gender_cache[cache_key] = "female"
+                            self._add_to_gender_cache(cache_key, "female")
                             return "female"
                         elif "男" in answer2:
-                            self._gender_cache[cache_key] = "male"
+                            self._add_to_gender_cache(cache_key, "male")
                             return "male"
             else:
                 logger.warning(f"自动升降调：LLM返回为空，无法判断歌手「{artist_name}」性别")
@@ -458,7 +498,7 @@ class MusicPlugin(Star):
             return self._gender_cache[cache_key]
         mapped = self._detect_model_gender(model_display)
         if mapped:
-            self._gender_cache[cache_key] = mapped
+            self._add_to_gender_cache(cache_key, mapped)
             return mapped
         try:
             if event:
@@ -477,10 +517,10 @@ class MusicPlugin(Star):
                 answer = resp.completion_text.strip()
                 logger.info(f"自动升降调：LLM判断模型「{model_display}」性别 → {answer}")
                 if "女" in answer:
-                    self._gender_cache[cache_key] = "female"
+                    self._add_to_gender_cache(cache_key, "female")
                     return "female"
                 elif "男" in answer:
-                    self._gender_cache[cache_key] = "male"
+                    self._add_to_gender_cache(cache_key, "male")
                     return "male"
             else:
                 logger.warning(f"自动升降调：LLM返回为空，无法判断模型「{model_display}」性别")
@@ -686,11 +726,11 @@ class MusicPlugin(Star):
         if not keyword:
             yield event.plain_result("用法: /qq点歌 <关键词>")
             return
+        from .api import QQMusicAPI
+        api_key = self.config.get("third_party_api_key", "")
+        api = QQMusicAPI(api_key=api_key)
         try:
-            from .api import QQMusicAPI
-            api = QQMusicAPI()
             songs = await api.fetch_data(keyword=keyword, limit=5)
-            await api.close()
             if not songs:
                 yield event.plain_result(f"在QQ音乐未找到与 '{keyword}' 相关的歌曲。")
                 return
@@ -705,6 +745,8 @@ class MusicPlugin(Star):
         except Exception as e:
             logger.error(f"QQ音乐搜索失败: {e}")
             yield event.plain_result(f"搜索失败: {e}")
+        finally:
+            await api.close()
 
     async def _handle_cover(self, event: AstrMessageEvent, api_type="rvc"):
         cmd = api_type
@@ -817,7 +859,8 @@ class MusicPlugin(Star):
             return
 
         from .api import QQMusicAPI
-        qq_api = QQMusicAPI()
+        api_key = self.config.get("third_party_api_key", "")
+        qq_api = QQMusicAPI(api_key=api_key)
         try:
             songs = await qq_api.fetch_data(keyword=song_name, limit=10)
             if not songs:
@@ -911,11 +954,53 @@ class MusicPlugin(Star):
                 import aiohttp
                 from .api import QQMusicAPI
                 
-                qq_api = QQMusicAPI()
+                api_key = self.config.get("third_party_api_key", "")
+                qq_api = QQMusicAPI(api_key=api_key)
                 try:
                     songmid = song.get("songmid", "")
                     song_name = song.get("name", "")
-                    audio_url = await qq_api.fetch_song_url(songmid, song_name=song_name)
+                    
+                    # === QQ音乐获取播放链接重试机制 ===
+                    audio_url = None
+                    if self.qqmusic_retry_on_ratelimit:
+                        last_fetch_error = None
+                        retry_sent = False
+                        for attempt in range(1, self.qqmusic_retry_max_attempts + 1):
+                            try:
+                                audio_url = await qq_api.fetch_song_url(songmid, song_name=song_name)
+                                if audio_url:
+                                    break
+                                logger.warning(f"QQ音乐获取播放链接返回空，尝试 {attempt}/{self.qqmusic_retry_max_attempts}")
+                                if attempt < self.qqmusic_retry_max_attempts:
+                                    # 第一次重试时通知群聊
+                                    if not retry_sent:
+                                        try:
+                                            await event.send(event.plain_result(f"⏳ QQ音乐获取播放链接遇到风控，正在自动重试...（最多重试{self.qqmusic_retry_max_attempts}次，每次间隔5秒）"))
+                                            retry_sent = True
+                                        except:
+                                            pass
+                                    await asyncio.sleep(5)
+                            except Exception as e:
+                                last_fetch_error = str(e)
+                                logger.warning(f"QQ音乐获取播放链接异常: {e}，尝试 {attempt}/{self.qqmusic_retry_max_attempts}")
+                                if attempt < self.qqmusic_retry_max_attempts:
+                                    # 第一次重试时通知群聊
+                                    if not retry_sent:
+                                        try:
+                                            await event.send(event.plain_result(f"⏳ QQ音乐获取播放链接遇到风控，正在自动重试...（最多重试{self.qqmusic_retry_max_attempts}次，每次间隔5秒）"))
+                                            retry_sent = True
+                                        except:
+                                            pass
+                                    await asyncio.sleep(5)
+                        
+                        if not audio_url:
+                            error_detail = f" (最后一次错误: {last_fetch_error})" if last_fetch_error else ""
+                            error_msg = f"❌ QQ音乐源获取失败: 无法获取《{song_name}》的播放链接。已重试{self.qqmusic_retry_max_attempts}次仍失败。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API触发风控 3) 网络问题。建议换一首歌或稍后再试。{error_detail}"
+                            logger.error(error_msg)
+                            await event.send(event.plain_result(error_msg))
+                            return
+                    else:
+                        audio_url = await qq_api.fetch_song_url(songmid, song_name=song_name)
                     
                     if not audio_url:
                         error_msg = f"❌ QQ音乐源获取失败: 无法获取《{song_name}》的播放链接。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API限制 3) 网络问题。建议换一首歌或稍后再试。"
@@ -926,7 +1011,7 @@ class MusicPlugin(Star):
                     # 下载到本地临时文件（使用英文文件名）
                     temp_dir = os.path.join(os.path.dirname(__file__), "temp_audio")
                     os.makedirs(temp_dir, exist_ok=True)
-                    temp_audio_file = os.path.join(temp_dir, f"qq_{hash(songmid) % 10000000}.mp3")
+                    temp_audio_file = os.path.join(temp_dir, f"qq_{uuid.uuid4().hex[:8]}_{hash(songmid) % 10000}.mp3")
                     
                     async with aiohttp.ClientSession() as session:
                         async with session.get(audio_url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
@@ -1010,12 +1095,12 @@ class MusicPlugin(Star):
         Returns:
             返回搜索到的歌曲列表，包含序号、歌名、歌手和歌曲ID
         '''
+        api_to_use = self.api
+        platform_name = "网易云音乐"
+        _qq_api_inst = None
+        
         try:
             limit = min(max(limit, 1), 10)
-            
-            # 确定使用的API
-            api_to_use = self.api
-            platform_name = "网易云音乐"
             
             if platform.lower() in ['qq', 'qqmusic', 'qq音乐', 'qq音乐']:
                 if not self.enable_qqmusic:
@@ -1024,7 +1109,9 @@ class MusicPlugin(Star):
                     return "❌ qqmusic-api-python 库未安装！请联系管理员安装。"
                 
                 from .api import QQMusicAPI
-                api_to_use = QQMusicAPI()
+                api_key = self.config.get("third_party_api_key", "")
+                _qq_api_inst = QQMusicAPI(api_key=api_key)
+                api_to_use = _qq_api_inst
                 platform_name = "QQ音乐"
             elif platform.lower() in ['netease', '网易云', 'netease_cloud', 'default']:
                 if self.disable_netease:
@@ -1069,6 +1156,9 @@ class MusicPlugin(Star):
         except Exception as e:
             logger.error(traceback.format_exc())
             return f"搜索歌曲时出错: {e}"
+        finally:
+            if _qq_api_inst is not None:
+                await _qq_api_inst.close()
 
     @filter.llm_tool(name="rvc_cover")
     async def rvc_cover(self, event: AstrMessageEvent, song_name: str, artist_name: Optional[str] = None, model_index: int = 1, model_name: Optional[str] = None, key_shift: int = 0, music_source: Optional[str] = None) -> str:
@@ -1188,7 +1278,8 @@ class MusicPlugin(Star):
                 if not self.enable_qqmusic:
                     return "❌ QQ音乐功能未启用"
                 from .api import QQMusicAPI
-                search_api = QQMusicAPI()
+                api_key = self.config.get("third_party_api_key", "")
+                search_api = QQMusicAPI(api_key=api_key)
             elif actual_music_source in ["netease", "netease_nodejs"]:
                 if self.disable_netease:
                     return "❌ 网易云音乐功能已禁用"
@@ -1196,9 +1287,56 @@ class MusicPlugin(Star):
             else:
                 search_api = self.api
             
-            songs = await search_api.fetch_data(keyword=song_name, limit=10)
+            # === QQ音乐风控重试机制 ===
+            songs = []
+            if actual_music_source == "qqmusic" and self.qqmusic_retry_on_ratelimit:
+                # 带重试的QQ音乐搜索
+                last_error = None
+                retry_sent = False
+                for attempt in range(1, self.qqmusic_retry_max_attempts + 1):
+                    try:
+                        songs = await search_api.fetch_data(keyword=song_name, limit=10)
+                        if songs:
+                            break  # 搜索成功，跳出重试循环
+                        # 返回空列表，可能是风控或真的没结果
+                        logger.warning(f"QQ音乐搜索返回空列表，尝试 {attempt}/{self.qqmusic_retry_max_attempts}")
+                        if attempt < self.qqmusic_retry_max_attempts:
+                            # 第一次重试时通知群聊
+                            if not retry_sent:
+                                try:
+                                    await event.send(event.plain_result(f"⏳ QQ音乐搜索遇到风控，正在自动重试...（最多重试{self.qqmusic_retry_max_attempts}次，每次间隔5秒）"))
+                                    retry_sent = True
+                                except:
+                                    pass
+                            await asyncio.sleep(5)  # 等待5秒后重试
+                    except Exception as e:
+                        last_error = str(e)
+                        logger.warning(f"QQ音乐搜索异常: {e}，尝试 {attempt}/{self.qqmusic_retry_max_attempts}")
+                        if attempt < self.qqmusic_retry_max_attempts:
+                            # 第一次重试时通知群聊
+                            if not retry_sent:
+                                try:
+                                    await event.send(event.plain_result(f"⏳ QQ音乐搜索遇到风控，正在自动重试...（最多重试{self.qqmusic_retry_max_attempts}次，每次间隔5秒）"))
+                                    retry_sent = True
+                                except:
+                                    pass
+                            await asyncio.sleep(5)  # 等待5秒后重试
+                
+                if not songs:
+                    error_detail = f" (最后一次错误: {last_error})" if last_error else ""
+                    return f"❌ QQ音乐搜索失败: 无法找到《{song_name}》。已重试{self.qqmusic_retry_max_attempts}次仍失败。可能原因：1) QQ音乐API触发风控，需进行登录或安全验证 2) 该歌曲不存在于QQ音乐 3) 网络问题。建议尝试用网易云音乐搜索（music_source='netease'）或稍后再试。{error_detail}"
+            else:
+                # 普通搜索（无重试）
+                songs = await search_api.fetch_data(keyword=song_name, limit=10)
+            
+            # 关闭临时创建的 QQMusicAPI 搜索实例
+            if actual_music_source == "qqmusic" and hasattr(search_api, 'close'):
+                await search_api.close()
+            
             if not songs:
-                return f"未找到歌曲 '{song_name}'。"
+                if actual_music_source == "qqmusic":
+                    return f"❌ QQ音乐搜索失败: 无法找到《{song_name}》。可能原因：1) QQ音乐API触发风控，需进行登录或安全验证 2) 该歌曲不存在于QQ音乐 3) 网络问题。建议尝试用网易云音乐搜索（music_source='netease'）或稍后再试。"
+                return f"❌ 未找到歌曲 '{song_name}'。"
             
             # 智能匹配：如果搜索结果有多个，尝试找到和用户搜索词最匹配的一首
             selected_song = songs[0]
@@ -1259,14 +1397,55 @@ class MusicPlugin(Star):
             temp_audio_file = None
             
             if actual_music_source == "qqmusic":
+                from .api import QQMusicAPI
+                api_key = self.config.get("third_party_api_key", "")
+                qq_api = QQMusicAPI(api_key=api_key)
                 try:
-                    from .api import QQMusicAPI
-                    qq_api = QQMusicAPI()
                     songmid = selected_song.get("songmid") or selected_song["id"]
                     song_display_name = selected_song.get("name", song_name)
                     
                     logger.info(f"QQ音乐: 获取播放链接 {songmid} - {song_display_name}")
-                    audio_url = await qq_api.fetch_song_url(songmid, song_display_name)
+                    
+                    # === QQ音乐获取播放链接重试机制 ===
+                    audio_url = None
+                    if self.qqmusic_retry_on_ratelimit:
+                        last_fetch_error = None
+                        retry_sent = False
+                        for attempt in range(1, self.qqmusic_retry_max_attempts + 1):
+                            try:
+                                audio_url = await qq_api.fetch_song_url(songmid, song_display_name)
+                                if audio_url:
+                                    break  # 获取成功
+                                logger.warning(f"QQ音乐获取播放链接返回空，尝试 {attempt}/{self.qqmusic_retry_max_attempts}")
+                                if attempt < self.qqmusic_retry_max_attempts:
+                                    # 第一次重试时通知群聊
+                                    if not retry_sent:
+                                        try:
+                                            await event.send(event.plain_result(f"⏳ QQ音乐获取播放链接遇到风控，正在自动重试...（最多重试{self.qqmusic_retry_max_attempts}次，每次间隔5秒）"))
+                                            retry_sent = True
+                                        except:
+                                            pass
+                                    await asyncio.sleep(5)
+                            except Exception as e:
+                                last_fetch_error = str(e)
+                                logger.warning(f"QQ音乐获取播放链接异常: {e}，尝试 {attempt}/{self.qqmusic_retry_max_attempts}")
+                                if attempt < self.qqmusic_retry_max_attempts:
+                                    # 第一次重试时通知群聊
+                                    if not retry_sent:
+                                        try:
+                                            await event.send(event.plain_result(f"⏳ QQ音乐获取播放链接遇到风控，正在自动重试...（最多重试{self.qqmusic_retry_max_attempts}次，每次间隔5秒）"))
+                                            retry_sent = True
+                                        except:
+                                            pass
+                                    await asyncio.sleep(5)
+                        
+                        if not audio_url:
+                            error_detail = f" (最后一次错误: {last_fetch_error})" if last_fetch_error else ""
+                            error_msg = f"❌ QQ音乐源获取失败: 无法获取《{song_display_name}》的播放链接。已重试{self.qqmusic_retry_max_attempts}次仍失败。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API触发风控 3) 网络问题。建议换一首歌或稍后再试。{error_detail}"
+                            logger.error(error_msg)
+                            return error_msg
+                    else:
+                        audio_url = await qq_api.fetch_song_url(songmid, song_display_name)
                     
                     if not audio_url:
                         error_msg = f"❌ QQ音乐源获取失败: 无法获取《{song_display_name}》的播放链接。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API限制 3) 网络问题。建议换一首歌或稍后再试。"
@@ -1296,6 +1475,8 @@ class MusicPlugin(Star):
                 except Exception as e:
                     logger.error(f"QQ音乐下载失败: {traceback.format_exc()}")
                     return f"❌ QQ音乐源获取失败: {e}。建议换一首歌或稍后再试。"
+                finally:
+                    await qq_api.close()
             
             base_url = self.rvc_base_url if api_type == "rvc" else self.svc_base_url
             async with self._get_gradio_client(base_url) as client:
@@ -1592,13 +1773,19 @@ class MusicPlugin(Star):
         try:
             result = await self._do_cover(event, song_name, api_type, model_index, key_shift, music_source)
 
-            # 检查是否失败（返回字符串以❌开头表示失败）
-            is_failed = result.startswith("❌") or "失败" in result or "错误" in result or "超时" in result
+            # 检查是否失败（返回字符串以❌开头、包含失败/错误/超时/未找到等关键词都表示失败）
+            is_failed = (result.startswith("❌") or "失败" in result or "错误" in result 
+                        or "超时" in result or "未找到" in result or "不存在" in result
+                        or "无法获取" in result or "触发风控" in result)
 
-            if self.enable_config_report:
+            # === 无论成功失败，都发送结果消息到群聊 ===
+            if is_failed:
+                # 失败时强制发送错误消息（不受 enable_config_report 开关限制）
+                await event.send(event.plain_result(result))
+            elif self.enable_config_report:
+                # 成功时根据配置决定是否发送配置报告
                 source_info = f", 音乐源={music_source}" if music_source else ""
-                if not is_failed:
-                    result += f"\n\n📊 本次配置：类型={api_type.upper()}, 模型={model_display}, 调音={key_shift:+d}{source_info}"
+                result += f"\n\n📊 本次配置：类型={api_type.upper()}, 模型={model_display}, 调音={key_shift:+d}{source_info}"
                 await event.send(event.plain_result(result))
 
             # === LLM 通知机制 ===
@@ -2215,11 +2402,7 @@ class MusicPlugin(Star):
         # 保存偏好数据
         try:
             if hasattr(self, '_pref_lock') and self.enable_preference_learning:
-                async with self._pref_lock:
-                    pref_path = Path(self.preference_storage_path)
-                    pref_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(pref_path, 'w', encoding='utf-8') as f:
-                        json.dump(self.user_preferences, f, ensure_ascii=False, indent=2)
+                await self._save_preferences()
         except Exception as e:
             logger.error(f"[MatsukoCover] 卸载时保存偏好失败: {e}")
         

@@ -35,6 +35,20 @@
     "hint": "开启后可以使用QQ音乐搜索歌曲进行翻唱。支持LLM工具调用和手动指令调用。",
     "default": true
   },
+  "qqmusic_retry_on_ratelimit": {
+    "description": "QQ音乐触发风控时自动重试",
+    "type": "bool",
+    "hint": "开启后，当QQ音乐API触发风控（如'需进行登录或者安全验证'）时，会自动等待后重试。关闭则立即返回错误提示。",
+    "default": true
+  },
+  "qqmusic_retry_max_attempts": {
+    "description": "QQ音乐风控重试最大次数",
+    "type": "int",
+    "hint": "当QQ音乐触发风控时，最多重试的次数。每次重试间隔5秒。建议设置在2-5次之间。",
+    "default": 3,
+    "minimum": 1,
+    "maximum": 10
+  },
   "disable_netease": {
     "description": "禁用网易云音乐点歌",
     "type": "bool",
@@ -153,7 +167,7 @@
     "description": "第三方音乐API密钥 (jkapi.com)",
     "type": "string",
     "hint": "用于获取QQ音乐付费歌曲的播放链接。注册 https://jkapi.com 后在用户中心获取apiKey。留空则不使用第三方API。",
-    "default": "34accb9e82cc8ab5f8be9a59b8ab857c"
+    "default": ""
   },
   "enable_progress_bar": {
     "description": "开启渲染和分离进度条输出到QQ聊天窗口",

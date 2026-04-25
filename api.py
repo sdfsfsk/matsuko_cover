@@ -190,13 +190,14 @@ class QQMusicAPI:
     - 获取播放链接
     """
 
-    def __init__(self):
+    def __init__(self, api_key: str = None):
         """
         初始化QQ音乐API
         """
         if not QQ_MUSIC_AVAILABLE:
             raise ImportError("qqmusic-api-python not installed")
         self._client = None
+        self.api_key = api_key
 
     async def _get_client(self):
         """获取或创建客户端"""
@@ -284,22 +285,22 @@ class QQMusicAPI:
             logger.error(f"官方API获取失败: {e}")
         
         # 方式2：使用第三方免费API（支持付费歌曲）
-        try:
-            import aiohttp
-            import json
-            search_keyword = song_name or songmid
-            async with aiohttp.ClientSession() as session:
-                # 使用第三方API搜索并获取播放链接 (需要apiKey)
-                url = f"https://jkapi.com/api/music?plat=qq&type=json&apiKey=34accb9e82cc8ab5f8be9a59b8ab857c&name={search_keyword}"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
-                        text = await resp.text()
-                        data = json.loads(text)
-                        if data.get("code") == 1 and data.get("music_url"):
-                            logger.info(f"第三方API获取成功: {search_keyword}")
-                            return data["music_url"]
-        except Exception as e:
-            logger.error(f"第三方API获取失败: {e}")
+        if self.api_key:
+            try:
+                import aiohttp
+                import json
+                search_keyword = song_name or songmid
+                async with aiohttp.ClientSession() as session:
+                    url = f"https://jkapi.com/api/music?plat=qq&type=json&apiKey={self.api_key}&name={search_keyword}"
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status == 200:
+                            text = await resp.text()
+                            data = json.loads(text)
+                            if data.get("code") == 1 and data.get("music_url"):
+                                logger.info(f"第三方API获取成功: {search_keyword}")
+                                return data["music_url"]
+            except Exception as e:
+                logger.error(f"第三方API获取失败: {e}")
         
         # 方式3：使用另一个备选API
         try:

@@ -1,6 +1,6 @@
 # astrbot_plugin_matsuko_cover（AI翻唱插件）
 
-> **版本：** v2.5.4 | **作者：** Matsuko / CCYellowStar2
+> **版本：** v2.5.5 | **作者：** Matsuko / CCYellowStar2
 原项目链接：[https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
 ## ✨ 简介
 
@@ -27,6 +27,7 @@
 | 🏷️ **模型别名与模糊匹配** | 用中文别名或部分名称指定模型，无需记序号 |
 | ❌ **智能错误反馈** | QQ音乐源获取失败时自动提示原因并建议解决方案，AI自动通知用户 |
 | 📢 **AI状态同步** | 翻唱成功/失败均自动通知AI，避免AI以为任务还在进行中 |
+| 🔄 **QQ音乐风控自动重试** | QQ音乐API触发风控时自动重试（可配置开关和次数），提高成功率 |
 
 ---
 
@@ -91,8 +92,8 @@ pip install gradio_client aiohttp qqmusic-api-python
 解压您下载的整合包后，无需进行任何安装，里面已经内置了开箱即用的完整环境：
 
 - **启动服务**：根据需要双击启动对应的服务：
-   - 仅使用 RVC：运行 `启动 rvcapi.bat` (默认端口 7866)
-   - 仅使用 SVC：运行 `启动 svcapi.bat` (默认端口 7868)
+   - 仅使用 RVC：运行 `启动 rvcapi.bat` (默认端口 7860)
+   - 仅使用 SVC：运行 `启动 svcapi.bat` (默认端口 7866)
    - 两个都要用：**同时运行这两个 bat 文件**
 
 > ⚠️ **注意**：启动 API 的同时，您的底层 RVC 或 SVC 引擎也必须处于运行状态，API 中间件会将任务转发给底层引擎执行。
@@ -298,6 +299,8 @@ AI 会记住你的喜好，下次翻唱时自动应用：
 | `nodejs_base_url` | string | `https://wyy.xhily.com` | 网易云 Node.js API 地址（仅 `netease_nodejs` 模式生效） |
 | `enable_qqmusic` | bool | `true` | 启用 QQ 音乐搜索功能 |
 | `disable_netease` | bool | `false` | **禁用网易云**（开启后强制使用 QQ 音乐，推荐以获取更全版权） |
+| `qqmusic_retry_on_ratelimit` | bool | `true` | QQ 音乐触发风控时自动重试 |
+| `qqmusic_retry_max_attempts` | int | `3` | 风控重试最大次数（每次间隔 5 秒） |
 
 ### 超时配置
 
@@ -356,11 +359,43 @@ hoshino.pth|||星野
 | `max_batch_size` | int | `5` | 批量翻唱最大数量 |
 | `preference_storage_path` | string | `data/user_preferences.json` | 偏好数据存储路径 |
 
+### 音频分离参数配置
+
+> ⚠️ **注意**：以下参数仅对对应后端生效，另一套后端会自动忽略。
+
+**UVR5 参数（仅 RVCSVC-API-amd 后端有效）：**
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `uvr5_agg` | int | `10` | UVR5 人声分离聚合度，范围 0~20。值越大分离越激进（人声更完整但可能混入伴奏） |
+| `uvr5_tta` | bool | `false` | 测试时增强（TTA），对音频做多次翻转推理再取平均，提升分离质量但速度慢约一倍 |
+| `uvr5_postprocess` | bool | `false` | 后处理，检测并去除人声频谱中的静音区域，进一步减少伴奏泄漏 |
+| `uvr5_window_size` | int | `512` | STFT 窗口大小，影响频谱分辨率。可选 256 / 512 / 1024 |
+| `uvr5_high_end_process` | string | `mirroring` | 高频处理方式：`mirroring`（将中高频镜像填充到高频，推荐）或 `none` |
+
+**MSST 参数（仅 RVCSVC-API-MSST 后端有效）：**
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `msst_batch_size` | int | `2` | 批处理大小，控制显存占用与速度。显存 >16G 可调至 4 或 8 以加速 |
+| `msst_num_overlap` | int | `4` | 重叠次数，控制分离平滑度。值越大边缘越平滑但速度成倍下降 |
+| `msst_normalize` | bool | `true` | 分离前自动平衡音频音量，提高稳定性 |
+
+### 自动升降调配置
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `enable_auto_key_shift` | bool | `false` | 启用自动升降调。根据原曲歌手性别与模型性别自动调整音调（男→女升调，女→男降调） |
+| `male_to_female_shift` | int | `12` | 男歌手 → 女声模型时自动升调的半音数（RVC 官方推荐 +12） |
+| `female_to_male_shift` | int | `-12` | 女歌手 → 男声模型时自动降调的半音数 |
+| `artist_gender_map` | list | `[]` | 歌手性别映射表，格式：`歌手名:male` 或 `歌手名:female`。优先级高于 LLM 自动判断 |
+| `model_gender_map` | list | `[]` | 模型性别映射表，格式：`模型别名:male` 或 `模型别名:female` |
+
 ### 第三方 API
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `third_party_api_key` | string | （已内置） | jkapi.com 的 API Key，用于获取 QQ 音乐付费歌曲播放链接 |
+| `third_party_api_key` | string | `""` | jkapi.com 的 API Key，用于获取 QQ 音乐 VIP/付费歌曲播放链接。**留空则跳过第三方 API，仅使用官方和备选 API** |
 
 ---
 
@@ -393,7 +428,7 @@ hoshino.pth|||星野
               ▼                               ▼
 ┌─────────────────────────┐     ┌─────────────────────────┐
 │    RVCSVC-API (RVC)     │     │    RVCSVC-API (SVC)     │
-│    端口: 7866           │     │    端口: 7868           │
+│    端口: 7860           │     │    端口: 7866           │
 │                         │     │                         │
 │  Gradio API 中间件      │     │  Gradio API 中间件      │
 │  ┌───────────────────┐  │     │  ┌───────────────────┐  │
@@ -538,7 +573,8 @@ hoshino.pth|||星野
 
 1. 确认 `enable_qqmusic` 已开启
 2. 确认已安装 `qqmusic-api-python`：`pip install qqmusic-api-python`
-3. 部分付费歌曲可能需要配置有效的 `third_party_api_key`
+3. **VIP / 付费歌曲**需要配置有效的 `third_party_api_key`（前往 [jkapi.com](https://jkapi.com) 注册获取）
+4. 如果频繁触发风控，可开启 `qqmusic_retry_on_ratelimit` 自动重试（默认开启，最多重试 3 次）
 
 ### Q5: 音质不好或有杂音
 
@@ -579,6 +615,20 @@ LLM 会自动调用对应的工具完成操作。
 ---
 
 ## 📝 更新日志
+
+### v2.5.6
+- 🔒 **安全修复**：移除硬编码的第三方 API 密钥，`third_party_api_key` 默认值改为空字符串，现需用户手动配置
+- 🧹 **启动自动清理**：插件启动时自动清理 `temp_audio` 目录下超过 24 小时的旧临时文件，防止磁盘堆积
+- 🐛 **缓存防泄漏**：性别识别缓存限制最多 100 条，超限时自动清理一半，防止长期运行内存无限增长
+- 🐛 **临时文件防冲突**：QQ 音乐下载临时文件名改用 UUID，避免多人同时点歌导致文件互相覆盖
+- 🐛 **异步异常捕获**：`_create_tracked_task` 现在会正确记录异步任务异常，不再静默吞掉错误日志
+- 🐛 **失败判断修复**：去除过于宽泛的 `"无法"` 关键词判断，减少成功消息被误判为失败的概率
+- 🐛 **配置容错**：`index_rate` 格式错误时不再导致插件崩溃，自动回退至默认值 0.75 并输出警告
+- 🧹 **代码优化**：`terminate()` 卸载时不再重复写保存逻辑，统一调用 `_save_preferences()`
+
+### v2.5.5
+- 🔄 **QQ音乐风控自动重试**：新增 `qqmusic_retry_on_ratelimit` 和 `qqmusic_retry_max_attempts` 配置项。当QQ音乐API触发风控时自动重试（默认开启，重试3次，每次间隔5秒），大幅提高QQ音乐成功率。
+- 🎵 **QQ音乐搜索/获取链接重试**：在 `_do_cover` 和 `_send_song` 方法中均加入重试逻辑，覆盖搜索和获取播放链接两个环节。
 
 ### v2.5.4
 - ❌ **智能错误反馈**：QQ音乐源获取失败时，聊天窗口自动输出详细失败原因（VIP限制/API限制/网络问题）并给出解决方案。
