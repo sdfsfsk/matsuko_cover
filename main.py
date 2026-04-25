@@ -32,7 +32,7 @@ MODEL_ALIAS_SEPARATOR = "|||"
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
     "RVC/SVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈、QQ音乐风控自动重试）",
-    "2.5.5",
+    "2.5.6",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):

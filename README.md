@@ -1,6 +1,6 @@
 # astrbot_plugin_matsuko_cover（AI翻唱插件）
 
-> **版本：** v2.5.5 | **作者：** Matsuko / CCYellowStar2
+> **版本：** v2.5.6 | **作者：** Matsuko / CCYellowStar2
 原项目链接：[https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
 ## ✨ 简介
 
