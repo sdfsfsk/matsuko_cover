@@ -3,13 +3,13 @@
     "description": "RVC API Gradio 后端服务地址",
     "type": "string",
     "hint": "你的 Gradio API RVC 后端运行的地址，必须以 / 结尾",
-    "default": "http://127.0.0.1:7860/"
+    "default": "http://127.0.0.1:3333/"
   },
   "svc_base_url": {
     "description": "SVC API Gradio 后端服务地址",
     "type": "string",
     "hint": "你的 Gradio API SVC 后端运行的地址，必须以 / 结尾",
-    "default": "http://127.0.0.1:7866/"
+    "default": "http://127.0.0.1:9999/"
   },
   "default_api": {
     "description": "默认使用的音乐 API",
@@ -316,5 +316,11 @@
     "type": "list",
     "hint": "手动指定模型的性别，每行一个，格式为 '模型别名:male' 或 '模型别名:female'。例如：塔菲:female、派蒙:female、某男声模型:male。模型别名需与 rvc_models_keywords/svc_models_keywords 中的别名一致。未在此表中的模型无法自动升降调。",
     "default": []
+  },
+  "shift_accompaniment": {
+    "description": "升降调时同时调整伴奏音高",
+    "type": "bool",
+    "hint": "开启后，设置升降调时伴奏会同步调整以匹配人声。关闭则只调整人声音高，伴奏保持原调。适合想单独听人声变化效果时使用。默认开启。",
+    "default": true
   }
 }

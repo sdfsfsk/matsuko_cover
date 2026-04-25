@@ -1,6 +1,6 @@
 # astrbot_plugin_matsuko_cover（AI翻唱插件）
 
-> **版本：** v2.5.6 | **作者：** Matsuko / CCYellowStar2
+> **版本：** v2.5.7 | **作者：** Matsuko / CCYellowStar2
 原项目链接：[https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
 ## ✨ 简介
 
@@ -60,6 +60,11 @@ pip install gradio_client aiohttp qqmusic-api-python
 > **目前提供的两个后端版本【仅支持 AMD 显卡 (A卡)】运行！如果您使用的是 NVIDIA 显卡 (N卡) 或其他配置，将无法正常运行分离与推理功能哦喵~**
 
 ### 1. 下载 RVCSVC-API 后端整合包
+
+🎉 **RVCSVC-API v1.2.2 更新内容：**
+- **伴奏升调开关**：新增 `shift_accompaniment` 参数，支持控制升降调时是否同步调整伴奏音高。开启时人声和伴奏同步升降；关闭时只调整人声，伴奏保持原调。
+- **升降调范围放宽**：混音阶段不再使用 `optimize_pitch_shift` 限制伴奏调整范围，传入 ±12 时伴奏也会同步升降一个八度。
+- **SVC 硬编码端口修复**：SVC 中间层 `_call_gradio_sse` 中硬编码的 `127.0.0.1:7777` 改为从 `SVC_API_BASE` 常量解析，方便统一修改上游端口。
 
 🎉 **RVCSVC-API v1.2.1 更新内容：**
 - **UVR5 参数动态化**：UVR5 人声分离参数（聚合度、TTA、后处理、窗口大小、高频处理方式）现支持从插件端动态传参，不再硬编码。可在 AstrBot 插件配置面板中调整，无需修改后端代码。
@@ -381,6 +386,12 @@ hoshino.pth|||星野
 | `msst_num_overlap` | int | `4` | 重叠次数，控制分离平滑度。值越大边缘越平滑但速度成倍下降 |
 | `msst_normalize` | bool | `true` | 分离前自动平衡音频音量，提高稳定性 |
 
+### 伴奏音高配置
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `shift_accompaniment` | bool | `true` | **升降调时同时调整伴奏音高**。开启后，设置升降调时伴奏会同步调整以匹配人声；关闭则只调整人声音高，伴奏保持原调。适合想单独听人声变化效果时使用 |
+
 ### 自动升降调配置
 
 | 配置项 | 类型 | 默认值 | 说明 |
@@ -615,6 +626,14 @@ LLM 会自动调用对应的工具完成操作。
 ---
 
 ## 📝 更新日志
+
+### v2.5.7
+- 🎵 **伴奏升调开关**：新增 `shift_accompaniment` 配置项，支持控制升降调时是否同步调整伴奏音高。开启后人声与伴奏同步升降；关闭时只调整人声，伴奏保持原调。
+- 🔧 **依赖补充**：`requirements.txt` 补充 `aiohttp` 和 `qqmusic-api-python`，避免新安装用户缺失依赖。
+- 🔧 **RVCSVC-API 后端同步更新**：
+  - 新增 `shift_accompaniment` API 参数（Gradio 隐藏组件），支持插件端控制伴奏音高调整。
+  - 混音阶段移除 `optimize_pitch_shift` 对伴奏的限制，±12 也会同步调整伴奏。
+  - SVC 中间层 `_call_gradio_sse` 硬编码 `127.0.0.1:7777` 改为从 `SVC_API_BASE` 解析。
 
 ### v2.5.6
 - 🔒 **安全修复**：移除硬编码的第三方 API 密钥，`third_party_api_key` 默认值改为空字符串，现需用户手动配置

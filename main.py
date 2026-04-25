@@ -32,7 +32,7 @@ MODEL_ALIAS_SEPARATOR = "|||"
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
     "RVC/SVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈、QQ音乐风控自动重试）",
-    "2.5.6",
+    "2.5.7",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
@@ -40,8 +40,8 @@ class MusicPlugin(Star):
         super().__init__(context)
         self.config = config
         
-        self.rvc_base_url = config.get("rvc_base_url", "http://127.0.0.1:7860/")
-        self.svc_base_url = config.get("svc_base_url", "http://127.0.0.1:7866/")
+        self.rvc_base_url = config.get("rvc_base_url", "http://127.0.0.1:3333/")
+        self.svc_base_url = config.get("svc_base_url", "http://127.0.0.1:9999/")
         
         self.default_api = config.get("default_api", "netease_nodejs")
         self.nodejs_base_url = config.get("nodejs_base_url", "https://163api.qijieya.cn")
@@ -106,6 +106,7 @@ class MusicPlugin(Star):
         self.filter_radius = config.get("filter_radius", 3)
         self.reverb_intensity = config.get("reverb_intensity", 4)
         self.delay_intensity = config.get("delay_intensity", 0)
+        self.shift_accompaniment = config.get("shift_accompaniment", True)
         
         # === MSST 分离参数（仅 RVCSVC-API-MSST 后端生效）===
         self.msst_batch_size = config.get("msst_batch_size", 2)
@@ -446,6 +447,8 @@ class MusicPlugin(Star):
                 f"请判断歌手或组合「{artist_name}」的主唱性别。"
                 f"如果是组合，请判断主唱（唱主要部分的人）的性别。"
                 f"只回答'男'或'女'，不要回答其他任何内容。"
+                f"如果不确定，请优先根据该名字在日语/华语/欧美流行乐坛的常见用法进行推断，"
+                f"不要仅凭字面含义判断。"
             )
             resp = await provider.text_chat(prompt=prompt)
             if resp and resp.completion_text:
@@ -460,6 +463,7 @@ class MusicPlugin(Star):
                 else:
                     prompt2 = (
                         f"「{artist_name}」的主唱是男性还是女性？"
+                        f"这是一位歌手或音乐组合，请结合流行音乐常识判断。"
                         f"只回答'男'或'女'。"
                     )
                     resp2 = await provider.text_chat(prompt=prompt2)
@@ -1054,6 +1058,7 @@ class MusicPlugin(Star):
                     msst_batch_size=self.msst_batch_size,
                     msst_num_overlap=self.msst_num_overlap,
                     msst_normalize=self.msst_normalize,
+                    shift_accompaniment=self.shift_accompaniment,
                     api_name="/convert",
                     timeout=self.inference_timeout,
                     event=event
@@ -1498,6 +1503,7 @@ class MusicPlugin(Star):
                     msst_batch_size=self.msst_batch_size,
                     msst_num_overlap=self.msst_num_overlap,
                     msst_normalize=self.msst_normalize,
+                    shift_accompaniment=self.shift_accompaniment,
                     api_name="/convert",
                     timeout=self.inference_timeout,
                     event=event
