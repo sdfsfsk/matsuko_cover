@@ -1,765 +1,278 @@
-# astrbot_plugin_matsuko_cover（AI翻唱插件）
+# astrbot_plugin_matsuko_cover
 
-> **版本：** v2.5.7 | **作者：** Matsuko / CCYellowStar2
-原项目链接：[https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
-## ✨ 简介
+适用于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的 AI 翻唱插件，支持 **RVC、SVC-Fusion、SoulX-SVCVC** 三种语音转换后端，以及网易云音乐、QQ 音乐、本地音频和 LLM 工具调用。
 
-一个在原项目加强的 [AstrBot](https://github.com/Soulter/AstrBot) 插件，可以使用 **RVC** 和 **SVC** 模型对歌曲进行 AI 翻唱。支持自动下载歌曲、人声伴奏分离、AI 变声、音频后处理和混音等全流程操作。原作者：CCYellowStar2
+> 当前版本：**v2.7.1**
+>
+> 许可证：**GNU AGPL-3.0**
+>
+> 本项目基于 [CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc) 扩展。
 
-### 注意：
+## 功能
 
-⚡ SVC-Fusion推理端的请去我的仓库下载SVC-Fusion替换文件。链接：https://github.com/sdfsfsk/SVC-Fusion-fix 
+| 功能 | RVC | SVC-Fusion | SoulX-SVCVC |
+|---|:---:|:---:|:---:|
+| 网易云 / QQ 音乐点歌 | ✅ | ✅ | ✅ |
+| 本地音频翻唱 | ✅ | ✅ | ✅ |
+| LLM 智能点歌 | ✅ | ✅ | ✅ |
+| 模型/音色列表和别名 | ✅ | ✅ | ✅ |
+| 自动升降调 | ✅ | ✅ | ✅ |
+| 推理进度发送到 QQ | ✅ | ✅ | ✅ |
+| 参数级结果缓存 | 由中间层提供 | 由中间层提供 | ✅ |
+| 零样本参考音色 | ❌ | ❌ | ✅ |
+| 固定/随机种子 | ❌ | ❌ | ✅ |
 
-### 核心特性
+其他能力：
 
-| 特性 | 说明 |
-|------|------|
-| 🎵 **多平台音乐搜索** | 网易云音乐、QQ音乐、酷狗、酷我等 16+ 平台 |
-| 🎤 **双引擎翻唱** | 同时支持 RVC 和 SVC 两种 AI 音色转换模型 |
-| 🤖 **LLM 工具调用** | 支持 12 个 LLM Function Calling 工具，智能对话式点歌 |
-| ⚡ **一键智能翻唱** | 只需说歌名，自动完成搜索→选歌→选模型→生成全流程 |
-| 📦 **批量翻唱** | 一次请求翻唱多首歌曲，异步后台执行不超时 |
-| 🧠 **偏好学习** | 记住用户常用模型和音调偏好，越用越智能 |
-| 🎯 **精准歌手匹配** | 支持自然语言点歌时精准匹配原曲歌手（如：点歌 金曜日のおはよう 雨宫天） |
-| ⏳ **实时进度条** | 支持将后端分离与推理进度实时反馈至 QQ 聊天窗口 |
-| 🎵 **F0音高算法配置** | RVC/SVC 分别支持多种音高提取算法，电音人声可切换 harvest |
-| 🔄 **确认机制** | 支持自然语言交互：「就这个」「换一个」「确定」「取消」 |
-| 🏷️ **模型别名与模糊匹配** | 用中文别名或部分名称指定模型，无需记序号 |
-| ❌ **智能错误反馈** | QQ音乐源获取失败时自动提示原因并建议解决方案，AI自动通知用户 |
-| 📢 **AI状态同步** | 翻唱成功/失败均自动通知AI，避免AI以为任务还在进行中 |
-| 🔄 **QQ音乐风控自动重试** | QQ音乐API触发风控时自动重试（可配置开关和次数），提高成功率 |
+- 搜索、选歌、选模型、推理和发送结果的完整工作流。
+- QQ 音乐风控重试与可选第三方 VIP 播放地址 API。
+- RVC/SVC 的 F0、检索率、混响、延迟、人声/伴奏音量等参数。
+- MSST 模型列表、默认分离模型切换和分离质量参数。
+- 翻唱任务查询、取消、批量翻唱、用户偏好和统计。
+- QQ 语音发送失败时自动继续尝试发送音频文件。
 
----
+## 架构
 
-## 📦 安装
+```mermaid
+flowchart LR
+    QQ[QQ / OneBot] --> AstrBot
+    AstrBot --> Plugin[matsuko_cover]
+    Plugin --> RVCAPI[RVC Gateway :3333]
+    Plugin --> SVCAPI[SVC Gateway :9999]
+    Plugin --> SVCVC[SVCVC-API-SVF :6666]
+    RVCAPI --> RVC[RVC :2333]
+    SVCAPI --> SVC[SVC-Fusion :7777]
+    SVCVC --> SoulX[SoulX-Singer SVC :7861]
+```
 
-### 方法一：通过插件商店安装（推荐）
+插件负责聊天交互、歌曲搜索/下载、参数选择和结果发送；中间层负责人声分离、缓存、后处理及调用实际推理引擎。
 
-通过 AstrBot 自带插件商店搜索 `astrbot_plugin_matsuko_cover` 一键安装。
+## 安装
 
-### 方法二：手动安装
-
-1. 下载本插件到 AstrBot 的 `data/plugins` 目录
-2. 重启 AstrBot
-
-### 方法三：安装依赖
+将仓库克隆到 AstrBot 的插件目录：
 
 ```bash
-pip install gradio_client aiohttp qqmusic-api-python
+cd AstrBot/data/plugins
+git clone https://github.com/sdfsfsk/matsuko_cover.git astrbot_plugin_matsuko_cover
+pip install -r astrbot_plugin_matsuko_cover/requirements.txt
 ```
 
-> `qqmusic-api-python` 为可选依赖，仅使用 QQ 音乐功能时需要安装。
+随后重启 AstrBot，并在 WebUI 的插件配置中启用需要的后端。
 
----
+依赖：
 
-## 🔧 前置要求
-
-⚠️ **重要提示**：本插件需要配合专门适配的 **RVCSVC-API 中间件** 以及底层的 RVC/SVC 引擎使用。由于后端环境体积较大，我们已将其打包并上传至百度网盘供大家下载。
-
-> 🚨 **【特别提醒：硬件要求】** 🚨
-> **目前提供的两个后端版本【仅支持 AMD 显卡 (A卡)】运行！如果您使用的是 NVIDIA 显卡 (N卡) 或其他配置，将无法正常运行分离与推理功能哦喵~**
-
-### 1. 下载 RVCSVC-API 后端整合包
-
-🎉 **RVCSVC-API v1.2.3 更新内容：**
-- **智能结果缓存**：中间层新增参数级结果缓存机制。`temp/` 目录自动缓存已生成的翻唱结果，同一首歌使用**相同参数**再次请求时直接返回缓存文件，**秒级响应**，无需重新走推理引擎。更换模型、调整升降调、修改混响/延迟等任意参数会自动触发重新推理并生成新缓存。
-- **启动端口统一**：RVC 中间层固定端口 `3333`，SVC 中间层固定端口 `9999`，与插件默认配置对齐。
-
-🎉 **RVCSVC-API v1.2.2 更新内容：**
-- **伴奏升调开关**：新增 `shift_accompaniment` 参数，支持控制升降调时是否同步调整伴奏音高。开启时人声和伴奏同步升降；关闭时只调整人声，伴奏保持原调。
-- **升降调范围放宽**：混音阶段不再使用 `optimize_pitch_shift` 限制伴奏调整范围，传入 ±12 时伴奏也会同步升降一个八度。
-- **SVC 硬编码端口修复**：SVC 中间层 `_call_gradio_sse` 中硬编码的 `127.0.0.1:7777` 改为从 `SVC_API_BASE` 常量解析，方便统一修改上游端口。
-
-🎉 **RVCSVC-API v1.2.1 更新内容：**
-- **UVR5 参数动态化**：UVR5 人声分离参数（聚合度、TTA、后处理、窗口大小、高频处理方式）现支持从插件端动态传参，不再硬编码。可在 AstrBot 插件配置面板中调整，无需修改后端代码。
-- **API 参数统一**：RVC 和 SVC 两个后端的 `/convert` API 参数列表完全统一，UVR5 和 MSST 参数同时传递，各后端自动忽略不适用的参数，插件无需区分后端类型。
-- **参数调试日志**：后端启动推理时会打印完整的 UVR5/MSST 参数信息，方便排查参数传递问题。
-
-🎉 **RVCSVC-API v1.1 更新内容：**
-- **完全绿色独立**：不再依赖外部（如 SVC-Fusion）的 Python 环境，自带完整运行环境，解压即用，支持任意目录移动！
-- **ZLUDA 核心升级**：RVCSVC-API-MSST 升级至最新 ZLUDA 核心，完美支持 RDNA4 (RX 9000系) 等最新架构显卡，修复了 `CUBLAS_STATUS_NOT_SUPPORTED` 报错。
-- **动态伴奏音高**：新增伴奏音高自动同步功能，当人声进行非八度（±12）的升降调时，伴奏会自动进行相应的移调处理。
-- **稳定性修复**：修复了导出音频时因 `temp` 目录缺失导致的 `FileNotFoundError` 错误。
-
-我们为您准备了两个不同版本的后端整合包，请根据您的需求下载：
-
-- 🔗 **百度网盘下载链接**：[点击这里下载](https://pan.baidu.com/s/1SGT3tstQu6IWV5XtcGVcnA?pwd=c3gm)
-- 🔑 **提取码**：`c3gm`
-
-**两个版本的区别说明：**
-1. **`RVCSVC-API-amd` (基础/兼容/DirectML版)**
-   - **底层技术**：基于 DirectML 加速。
-   - **人声分离方案**：采用经典的 **UVR5** (HP5模型)。
-   - **特点**：硬件兼容性极佳，支持各种老架构 AMD 独显以及内置的 AMD 核显 (APU)。显存占用相对较低，分离速度快。
-2. **`RVCSVC-API-MSST` (高阶/高精度/ZLUDA版)**
-   - **底层技术**：基于 ZLUDA 加速 (使 AMD 显卡直接运行 CUDA 代码)。
-   - **人声分离方案**：集成了最先进的 **BS-Roformer** (MSST) 模型。
-   - **特点**：人声分离精度极高，几乎无残留。但对硬件要求较高，建议使用较新的 AMD 桌面级显卡（如 RX 6000/7000 系列）。部分老显卡或核显在运行 ZLUDA 时可能会遇到兼容性报错或张量大小不匹配的问题。
-
-### 2. 启动后端服务
-
-解压您下载的整合包后，无需进行任何安装，里面已经内置了开箱即用的完整环境：
-
-- **启动服务**：根据需要双击启动对应的服务：
-   - 仅使用 RVC：运行 `启动 rvcapi.bat` (默认端口 **3333**)
-   - 仅使用 SVC：运行 `启动 svcapi.bat` (默认端口 **9999**)
-   - 两个都要用：**同时运行这两个 bat 文件**
-
-> ⚠️ **注意**：启动 API 的同时，您的底层 RVC 或 SVC 引擎也必须处于运行状态，API 中间件会将任务转发给底层引擎执行。
-> 
-> 🚨 **【特别提醒：SVC-Fusion 用户必看】** 🚨
-> 如果您使用的是 `SVC-Fusion` 作为底层 SVC 引擎，因为原版代码在接口通信和模型加载上与本插件存在兼容性问题，您**必须**替换部分核心文件！
-> - 在我仓库中提供了一个名为 `SVC-Fusion替换文件` 的文件夹（内含魔改补丁），链接在标题。
-> - **操作方法**：将该补丁文件夹中的 `amd` 目录直接复制，**覆盖**到您原版 `SVC-Fusion` 的根目录下即可完成适配！
-
-### 3. 模型文件存放
-
-将训练好的 `.pth` 模型文件放入后端对应的模型目录中，然后在聊天窗口发送 `/刷新rvc模型` 或 `/刷新svc模型` 命令，让插件重新加载最新的模型列表。
-
-详细的底层引擎配置请参考后端整合包内的具体说明。
-
----
-
-## ⌨️ 使用方法
-
-### 一、传统命令模式（适合手动操作）
-
-#### RVC 翻唱命令
-
-| 命令 | 说明 | 权限 |
-|------|------|------|
-| `/rvc <歌名> [升降调]` | 使用 RVC 模型翻唱歌曲 | 所有人 |
-| `/刷新rvc模型` | 从 RVC 后端刷新模型列表 | 所有人 |
-| `/设置rvc后端链接 <URL>` | 设置 RVC 后端地址 | **管理员** |
-
-#### SVC 翻唱命令
-
-| 命令 | 说明 | 权限 |
-|------|------|------|
-| `/svc <歌名> [升降调]` | 使用 SVC 模型翻唱歌曲 | 所有人 |
-| `/刷新svc模型` | 从 SVC 后端刷新模型列表 | 所有人 |
-| `/设置svc后端链接 <URL>` | 设置 SVC 后端地址 | **管理员** |
-
-#### SoulX-SVCVC 参考音色翻唱命令
-
-| 命令 | 说明 | 权限 |
-|------|------|------|
-| `/svcvc <歌名> [升降调]` | 用 SoulX-Singer SVC Voice Conversion 点歌（-36～36） | 所有人 |
-| `/qqsvcvc <歌名> [升降调]` | 用 QQ 音乐 + SoulX-SVCVC 点歌 | 所有人 |
-| `/刷新svcvc音色` | 从 `SVCVC-API/voice_profiles` 刷新参考音色 | 所有人 |
-| `/设置svcvc后端链接 <URL>` | 设置 SVCVC-API 地址 | **管理员** |
-
-参考音频直接放进 `SVCVC-API/voice_profiles`；文件名（不含扩展名）就是音色 ID，也可添加同名 JSON 设置显示名与说明。
-
-#### QQ 音乐命令
-
-| 命令 | 说明 | 前提条件 |
-|------|------|----------|
-| `/qqrvc <歌名>` | 用 QQ 音乐 + RVC 翻唱 | 开启 `enable_qqmusic` |
-| `/qqsvc <歌名>` | 用 QQ 音乐 + SVC 翻唱 | 开启 `enable_qqmusic` |
-| `/qqsvcvc <歌名>` | 用 QQ 音乐 + SoulX-SVCVC 翻唱 | 开启 `enable_qqmusic` 与 `enable_svcvc` |
-| `/qq点歌 <关键词>` | 在 QQ 音乐搜索歌曲 | 开启 `enable_qqmusic` |
-
-#### 参数说明
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `<歌名>` | 要翻唱的歌曲名称 | `孤勇者`、`晴天 - 周杰伦` |
-| `[升降调]` | 可选，范围 **-12 到 12** | `2` 表示升高 2 个半音，`-3` 表示降低 3 个半音 |
-
-#### 使用示例（传统模式）
-
-```
-用户: /rvc 孤勇者 2
-Bot: 为您找到以下歌曲：
-     1. 孤勇者 - 陈奕迅
-     2. 孤勇者（伴奏） - 陈奕迅
-     ...
-     请在30秒内输入歌曲序号进行选择：
-
-用户: 1
-Bot: 已选歌曲: 孤勇者
-     使用: RVC
-     
-     可用模型：
-     1. 塔菲
-     2. 阿米娅
-     ...
-     请在30秒内输入模型序号：
-
-用户: 1
-Bot: 好的！正在使用 RVC 模型【塔菲】为您生成《孤勇者》（+2调），请耐心等待...
-     [发送音频文件]
+```text
+gradio_client
+aiohttp
+qqmusic-api-python
 ```
 
----
+## 后端准备
 
-### 二、LLM 智能模式（推荐！🌟）
+### RVC
 
-当插件配合支持 Function Calling 的 LLM 使用时，可以通过**自然对话**完成所有操作。这是最高效的使用方式！
+- 插件默认中间层：`http://127.0.0.1:3333/`
+- 启动 RVC 上游和对应 RVCSVC-API 中间层。
+- 使用 `/刷新rvc模型` 读取模型列表。
 
-#### 方案 A：智能单步翻唱 `smart_cover` ⭐ 最推荐
+### SVC-Fusion
 
-只需一句话，自动完成**搜索 → 选歌 → 选模型 → 生成**全部流程：
+- 插件默认中间层：`http://127.0.0.1:9999/`
+- 启动 SVC-Fusion 上游和对应 RVCSVC-API 中间层。
+- 兼容补丁参考：[sdfsfsk/SVC-Fusion-fix](https://github.com/sdfsfsk/SVC-Fusion-fix)
+- 使用 `/刷新svc模型` 读取模型列表。
 
-| 用户输入 | 效果 |
-|---------|------|
-| `帮我翻唱《晴天》` | 自动用默认配置完成全部步骤 |
-| `用SVC翻唱《稻香》` | 指定使用 SVC 模型 |
-| `用第4个模型翻唱《七里香》，升2调` | 完全自定义参数 |
-| `用塔菲的模型翻唱《孤勇者》` | **用别名/名称指定模型**（模糊匹配） |
-| `从QQ音乐翻唱《起风了》` | 指定音乐源为 QQ 音乐 |
+### SoulX-SVCVC
 
-> 💡 支持用模型的**中文别名**或**文件名的一部分**来指定模型，无需记住序号！例如输入「塔菲」就能匹配到 `tafeim.pth`。
+SoulX-SVCVC 使用参考音频进行零样本音色转换，不需要训练 `.pth` 音色模型。
 
-#### 方案 D：批量翻唱 `batch_cover`
+- 中间层：[sdfsfsk/SVCVC-API-SVF](https://github.com/sdfsfsk/SVCVC-API-SVF)
+- Windows AMD ROCm 补丁：[sdfsfsk/SoulX-Singer-AMD-Patch](https://github.com/sdfsfsk/SoulX-Singer-AMD-Patch)
+- 插件默认中间层：`http://127.0.0.1:6666/`
+- SoulX-Singer SVC 上游：`http://127.0.0.1:7861/`
 
-一次请求翻唱整个歌单：
+启动顺序：
 
-| 用户输入 | 效果 |
-|---------|------|
-| `帮我翻唱这三首歌：《晴天》《稻香》《七里香》` | 批量翻唱 3 首 |
-| `用SVC批量翻唱《A》《B》《C》《D》《E》` | 指定类型批量翻唱 |
+1. 启动 SoulX-Singer，选择 `SVC voice conversion`，等待 7861 就绪。
+2. 启动 SVCVC-API-SVF，等待 6666 就绪。
+3. 在插件配置中开启 `enable_svcvc`。
+4. 使用 `/刷新svcvc音色`。
 
-> ⚠️ 单次最多翻唱数量由配置项 `max_batch_size` 控制（默认 5 首）。
->
-> 批量翻唱采用**异步后台执行**，不会因超时中断。每完成一首会立即推送音频，最后发送汇总报告。
+参考音色放入 SVCVC-API-SVF 的 `voice_profiles/`。支持 WAV、FLAC、MP3、OGG、M4A 和 AAC；文件名默认作为音色 ID，也可添加同名 JSON：
 
-#### 方案 E：偏好学习系统 🧠
+```json
+{
+  "profile_id": "my_voice",
+  "display_name": "示例音色",
+  "description": "干净、无伴奏的参考演唱",
+  "prompt_vocal_sep": false
+}
+```
 
-AI 会记住你的喜好，下次翻唱时自动应用：
+建议使用 5～30 秒、单人、无伴奏、低混响的干净音频。新增音色后需要重启或刷新中间层的 Gradio 音色选项，再执行插件刷新命令。
 
-| 用户输入 | 效果 |
-|---------|------|
-| `以后都用SVC翻唱` | 保存默认翻唱类型为 SVC |
-| `把默认模型改成第2个` | 保存默认模型序号 |
-| `默认升2调` | 保存默认音调调整 |
-| `给我推荐个配置` | 基于历史记录推荐最佳配置 |
-| `查看我的翻唱统计` | 显示个人使用报告（次数、收藏歌手等） |
-| `清空我的翻唱历史` | 删除所有个人记录，重新开始 |
+## 常用配置
 
-偏好数据保存在 `data/user_preferences.json`，包含：
-- 默认翻唱类型和模型
-- 默认音调调整值
-- 收藏歌曲列表（最近 20 首）
-- 偏爱歌手列表（最近 10 位）
-- 总使用次数和最后使用时间
+| 配置 | 默认值 | 说明 |
+|---|---:|---|
+| `rvc_base_url` | `http://127.0.0.1:3333/` | RVC 中间层 |
+| `svc_base_url` | `http://127.0.0.1:9999/` | SVC-Fusion 中间层 |
+| `svcvc_base_url` | `http://127.0.0.1:6666/` | SoulX-SVCVC 中间层 |
+| `enable_rvc` | `true` | 启用 RVC |
+| `enable_svc` | `true` | 启用 SVC-Fusion |
+| `enable_svcvc` | `false` | 启用 SoulX-SVCVC |
+| `enable_qqmusic` | `true` | 启用 QQ 音乐 |
+| `disable_netease` | `false` | 禁用网易云点歌 |
+| `enable_progress_bar` | `true` | 将后端进度发到聊天 |
+| `progress_update_interval` | `3` | 进度消息最小间隔（秒） |
+| `enable_send_file` | `false` | 除 QQ 语音外再发送文件 |
+| `inference_timeout` | `300` | 推理超时（秒） |
+| `llm_force_mode` | `false` | 禁用手动命令，只允许 LLM 工具 |
 
-#### 方案 C：确认机制
+SoulX 在 AMD 上处理长歌曲时建议把 `inference_timeout` 和任务超时提高到 `9000` 秒。
 
-在执行重要操作前支持自然语言确认：
+### SoulX 参数
 
-| 用户输入 | 效果 |
-|---------|------|
-| `就这个` | 确认当前选择 |
-| `换一个` | 更换当前选项 |
-| `确定` | 确认并继续 |
-| `取消` | 取消操作 |
-| `看看详情` | 查看当前选择的详细信息 |
-
-#### 其他 LLM 工具
-
-| 工具名 | 功能 | 说明 |
-|--------|------|------|
-| `search_music` | 搜索歌曲 | 支持指定关键词和返回数量 |
-| `rvc_cover` | RVC 翻唱 | 单独使用 RVC 模型翻唱 |
-| `svc_cover` | SVC 翻唱 | 单独使用 SVC 模型翻唱 |
-| `svcvc_cover` | SoulX-SVCVC 翻唱 | 选择参考音色点歌并报告实际种子 |
-| `get_available_models` | 查看模型列表 | 查看 RVC/SVC/SVCVC 所有可用模型、音色及别名 |
-| `save_preference` | 保存偏好 | 记住用户的常用配置 |
-| `get_recommendation` | 获取推荐 | 基于历史数据推荐配置 |
-| `view_my_stats` | 个人统计 | 查看完整使用报告 |
-| `clear_my_history` | 清空历史 | 删除所有个人记录 |
-
-#### search_music - 搜索歌曲
-**参数：**
-- keyword (string): 搜索关键词（必填）
-- limit (number): 返回数量，默认5，最大10
-
-**示例：** "帮我搜索一下周杰伦的歌"
-
----
-
-#### rvc_cover - RVC翻唱
-**参数：**
-- song_name (string): 歌曲名称（必填）
-- artist_name (string, 可选): 歌手名称（精准匹配原曲歌手）
-- model_index (number): 模型序号，默认1
-- key_shift (number): 音调调整(-12~12)，默认0
-
-**示例：** "用RVC第3个模型帮我翻唱雨宫天的《金曜日のおはよう》，升2调"
-
----
-
-#### svc_cover - SVC翻唱
-**参数：**
-- song_name (string): 歌曲名称（必填）
-- artist_name (string, 可选): 歌手名称（精准匹配原曲歌手）
-- model_index (number): 模型序号，默认1
-- key_shift (number): 音调调整(-12~12)，默认0
-
-**示例：** "用SVC模型的第2个模型翻唱《稻香》"
-
----
-
-## ⚙️ 配置说明
-
-在 AstrBot 控制面板进入 **插件管理 → astrbot_plugin_matsuko_cover → 插件配置** 进行设置。
-
-### 后端连接配置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `rvc_base_url` | string | `http://127.0.0.1:3333/` | RVC API Gradio 后端地址（必须以 `/` 结尾） |
-| `svc_base_url` | string | `http://127.0.0.1:9999/` | SVC API Gradio 后端地址（必须以 `/` 结尾） |
-| `svcvc_base_url` | string | `http://127.0.0.1:6666/` | SoulX-SVCVC 中间层地址（必须以 `/` 结尾） |
-| `enable_rvc` | bool | `true` | 启用 RVC 引擎 |
-| `enable_svc` | bool | `true` | 启用旧 SVC-Fusion 引擎 |
-| `enable_svcvc` | bool | `false` | 启用 SoulX-SVCVC 参考音色引擎 |
-
-### 音乐源配置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `default_api` | string | `netease_nodejs` | 默认音乐 API：`netease` / `netease_nodejs` / `qqmusic` |
-| `nodejs_base_url` | string | `https://wyy.xhily.com` | 网易云 Node.js API 地址（仅 `netease_nodejs` 模式生效） |
-| `enable_qqmusic` | bool | `true` | 启用 QQ 音乐搜索功能 |
-| `disable_netease` | bool | `false` | **禁用网易云**（开启后强制使用 QQ 音乐，推荐以获取更全版权） |
-| `qqmusic_retry_on_ratelimit` | bool | `true` | QQ 音乐触发风控时自动重试 |
-| `qqmusic_retry_max_attempts` | int | `3` | 风控重试最大次数（每次间隔 5 秒） |
-
-### 超时配置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `timeout` | int | `30` | 等待用户选择歌曲/模型的超时时间（秒） |
-| `inference_timeout` | int | `300` | AI 推理超时时间（秒），经常超时可调大 |
-| `llm_tool_timeout` | int | `10` | LLM 工具调用超时（秒），建议 5-10 秒让 LLM 快速收到响应 |
-
-### 模型配置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `rvc_models_keywords` | list | `[]` | RVC 模型别名列表，格式：`模型文件名\|\|\|别名`，每行一个 |
-| `svc_models_keywords` | list | `[]` | SVC 模型别名列表，格式同上 |
-| `svcvc_models_keywords` | list | `[]` | SoulX 参考音色别名，格式：`音色ID\|\|\|别名` |
-
-> 使用 `/刷新rvc模型`、`/刷新svc模型` 或 `/刷新svcvc音色` 可自动填充对应列表。
-
-### SoulX-SVCVC 参数
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `svcvc_prompt_vocal_sep` | `false` | 参考音频是否先分离人声 |
-| `svcvc_target_vocal_sep` | `true` | 目标歌曲是否先分离人声 |
+| 配置 | 默认值 | 说明 |
+|---|---:|---|
+| `svcvc_prompt_vocal_sep` | `false` | 是否分离参考音频 |
+| `svcvc_target_vocal_sep` | `true` | 是否分离目标歌曲 |
 | `svcvc_auto_shift` | `true` | 自动匹配音域 |
 | `svcvc_auto_mix_acc` | `true` | 自动混回伴奏 |
-| `svcvc_pitch_shift` | `0` | 指定变调，-36～36 |
-| `svcvc_n_step` | `32` | 采样步数，1～200 |
-| `svcvc_cfg` | `1.0` | CFG 系数，0～10 |
-| `svcvc_seed` | `42` | 固定种子，0～10000 |
-| `svcvc_random_seed` | `false` | 每任务生成并报告实际种子；随机任务不写持久缓存 |
+| `svcvc_pitch_shift` | `0` | 指定变调，范围 -36～36 |
+| `svcvc_n_step` | `32` | 采样步数，越高通常越慢 |
+| `svcvc_cfg` | `1.0` | CFG 系数 |
+| `svcvc_seed` | `42` | 固定种子 |
+| `svcvc_random_seed` | `false` | 每次使用随机种子 |
 
-**模型别名格式示例：**
+固定种子且其他参数一致时可以命中持久缓存；开启随机种子后，SVCVC-API-SVF 默认不会读取或写入持久缓存。
 
-```
-tafeim.pth|||塔菲
-amiya_model.pth|||阿米娅
-hoshino.pth|||星野
-```
+## 命令
 
-配置后即可用别名指定模型：`用塔菲模型翻唱《xxx》`
+### 模型和后端
 
-### LLM 智能功能开关
+| 命令 | 说明 |
+|---|---|
+| `/刷新rvc模型` | 刷新 RVC 模型 |
+| `/刷新svc模型` | 刷新 SVC-Fusion 模型 |
+| `/刷新svcvc音色` | 刷新 SoulX 参考音色 |
+| `/列出msst模型` | 查看 MSST 分离模型 |
+| `/切换msst模型 <序号或名称>` | 切换 MSST 分离模型 |
+| `/设置rvc后端链接 <URL>` | 修改 RVC 中间层地址（管理员） |
+| `/设置svc后端链接 <URL>` | 修改 SVC 中间层地址（管理员） |
+| `/设置svcvc后端链接 <URL>` | 修改 SVCVC 中间层地址（管理员） |
 
-以下开关可独立控制各高级功能的启用/禁用：
+### 点歌
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `llm_force_mode` | bool | `false` | **LLM 强制模式**：开启后禁用所有手动命令（`/rvc` `/svc` `/qqrvc` `/qqsvc` `/qq点歌` `/我的翻唱统计`），只能通过对话让 LLM 调用工具 |
-| `enable_smart_cover` | bool | `true` | 启用智能单步翻唱（smart_cover 一键翻唱） |
-| `enable_enhanced_context` | bool | `true` | 启用增强上下文记忆（优化搜索结果格式帮助 LLM 理解） |
-| `enable_confirm_mechanism` | bool | `true` | 启用确认机制（「就这个」「换一个」等自然语言交互） |
-| `enable_batch_cover` | bool | `true` | 启用批量翻唱功能 |
-| `enable_preference_learning` | bool | `true` | 启用偏好学习与推荐系统 |
-| `enable_progress_bar` | bool | `true` | 启用渲染和分离进度条输出到QQ聊天窗口 |
-| `enable_llm_success_notify` | bool | `true` | 处理完成后通知大语言模型 (LLM)，让其用人设回复用户 |
-| `enable_send_file` | bool | `false` | 翻唱完成后同时以文件附件形式发送到群聊，方便群友下载保存 |
-| `enable_config_report` | bool | `true` | 翻唱完成后发送配置信息报告（如"📊 本次配置：类型=RVC, 模型=塔菲, 调音=+0"）。关闭后只发送音频不发送文字消息 |
-| `progress_update_interval` | int | `3` | 进度条消息发送频率（秒），防刷屏保护 |
+| 命令 | 说明 |
+|---|---|
+| `/rvc <歌名> [升降调]` | RVC + 网易云点歌 |
+| `/svc <歌名> [升降调]` | SVC-Fusion + 网易云点歌 |
+| `/svcvc <歌名> [升降调]` | SoulX-SVCVC + 网易云点歌 |
+| `/qqrvc <歌名> [升降调]` | RVC + QQ 音乐 |
+| `/qqsvc <歌名> [升降调]` | SVC-Fusion + QQ 音乐 |
+| `/qqsvcvc <歌名> [升降调]` | SoulX-SVCVC + QQ 音乐 |
+| `/qq点歌 <关键词>` | 只搜索 QQ 音乐 |
+| `/本地翻唱` | 使用最近上传/缓存的本地音频 |
 
-### 默认参数配置
+### 任务
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `default_api_type` | string | `rvc` | 默认翻唱类型：`rvc`、`svc` 或 `svcvc` |
-| `default_model_index` | int | `1` | 默认模型序号（从 1 开始） |
-| `default_key_shift` | int | `0` | 默认音调调整（-12 到 12） |
-| `f0_method` | string | `rmvpe` | RVC 音高提取算法：`rmvpe`（默认，效果最好）/ `harvest`（电音人声推荐）/ `crepe`（吃GPU，DML不可用）/ `pm`（最快） |
-| `svc_f0_method` | string | `fcpe` | SVC 音高提取算法：`fcpe`（默认，SVC推荐）/ `rmvpe` / `crepe` / `harvest` / `parselmouth` / `dio` |
-| `max_batch_size` | int | `5` | 批量翻唱最大数量 |
-| `preference_storage_path` | string | `data/user_preferences.json` | 偏好数据存储路径 |
+| 命令 | 说明 |
+|---|---|
+| `/查看翻唱任务` | 查看当前任务状态 |
+| `/取消翻唱任务` | 请求取消当前任务 |
+| `/我的翻唱统计` | 查看个人翻唱统计 |
 
-### 音频分离参数配置
+如果启用了 `llm_force_mode`，上述手动命令会被禁用，请直接通过自然语言要求机器人点歌。
 
-> ⚠️ **注意**：以下参数仅对对应后端生效，另一套后端会自动忽略。
+## LLM 工具
 
-**UVR5 参数（仅 RVCSVC-API-amd 后端有效）：**
+插件提供以下主要 Function Calling 工具：
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `uvr5_agg` | int | `10` | UVR5 人声分离聚合度，范围 0~20。值越大分离越激进（人声更完整但可能混入伴奏） |
-| `uvr5_tta` | bool | `false` | 测试时增强（TTA），对音频做多次翻转推理再取平均，提升分离质量但速度慢约一倍 |
-| `uvr5_postprocess` | bool | `false` | 后处理，检测并去除人声频谱中的静音区域，进一步减少伴奏泄漏 |
-| `uvr5_window_size` | int | `512` | STFT 窗口大小，影响频谱分辨率。可选 256 / 512 / 1024 |
-| `uvr5_high_end_process` | string | `mirroring` | 高频处理方式：`mirroring`（将中高频镜像填充到高频，推荐）或 `none` |
+- `search_music`：搜索网易云或 QQ 音乐。
+- `rvc_cover`：使用 RVC 翻唱。
+- `svc_cover`：使用 SVC-Fusion 翻唱。
+- `svcvc_cover`：使用 SoulX 参考音色翻唱。
+- `smart_cover`：自动完成搜索、选歌、模型匹配和翻唱。
+- `batch_cover`：批量翻唱。
+- `get_available_models`：读取三种引擎的模型/音色列表。
+- `cover_absolute_path_audio`：处理本地绝对路径音频。
+- `cover_local_audio`：处理用户上传的音频。
+- `get_task_status` / `cancel_cover_task`：查询或取消任务。
 
-**MSST 参数（仅 RVCSVC-API-MSST 后端有效）：**
+示例：
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `msst_batch_size` | int | `2` | 批处理大小，控制显存占用与速度。显存 >16G 可调至 4 或 8 以加速 |
-| `msst_num_overlap` | int | `4` | 重叠次数，控制分离平滑度。值越大边缘越平滑但速度成倍下降 |
-| `msst_normalize` | bool | `true` | 分离前自动平衡音频音量，提高稳定性 |
-
-### 伴奏音高配置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `shift_accompaniment` | bool | `true` | **升降调时同时调整伴奏音高**。开启后，设置升降调时伴奏会同步调整以匹配人声；关闭则只调整人声音高，伴奏保持原调。适合想单独听人声变化效果时使用 |
-
-### 自动升降调配置
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `enable_auto_key_shift` | bool | `false` | 启用自动升降调。根据原曲歌手性别与模型性别自动调整音调（男→女升调，女→男降调） |
-| `male_to_female_shift` | int | `12` | 男歌手 → 女声模型时自动升调的半音数（RVC 官方推荐 +12） |
-| `female_to_male_shift` | int | `-12` | 女歌手 → 男声模型时自动降调的半音数 |
-| `artist_gender_map` | list | `[]` | 歌手性别映射表，格式：`歌手名:male` 或 `歌手名:female`。优先级高于 LLM 自动判断 |
-| `model_gender_map` | list | `[]` | 模型性别映射表，格式：`模型别名:male` 或 `模型别名:female` |
-
-### 第三方 API
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `third_party_api_key` | string | `""` | jkapi.com 的 API Key，用于获取 QQ 音乐 VIP/付费歌曲播放链接。**留空则跳过第三方 API，仅使用官方和备选 API** |
-
----
-
-## 🏗️ 系统架构与原理
-
-### 整体架构图
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          用户（QQ群/私聊）                               │
-│                    "帮我用塔菲的声音翻唱《孤勇者》"                        │
-└──────────────────────────────┬──────────────────────────────────────────┘
-                               │ 消息
-                               ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         AstrBot 机器人框架                               │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │              astrbot_plugin_matsuko_cover 插件                    │  │
-│  │                                                                   │  │
-│  │  ① 接收请求 → LLM解析意图 / 命令解析                               │  │
-│  │  ② 搜索歌曲（网易云API / QQ音乐API）                               │  │
-│  │  ③ 下载原始音频                                                    │  │
-│  │  ④ 调用 RVCSVC-API 进行推理                                       │  │
-│  │  ⑤ 接收结果 → 发送语音/文件到群聊                                   │  │
-│  └──────────────────────────┬────────────────────────────────────────┘  │
-└─────────────────────────────┼───────────────────────────────────────────┘
-                              │ Gradio API 调用
-                              │ (HTTP)
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-┌─────────────────────────┐     ┌─────────────────────────┐
-│    RVCSVC-API (RVC)     │     │    RVCSVC-API (SVC)     │
-│    端口: 3333           │     │    端口: 9999           │
-│                         │     │                         │
-│  Gradio API 中间件      │     │  Gradio API 中间件      │
-│  ┌───────────────────┐  │     │  ┌───────────────────┐  │
-││ 0. 检查参数缓存     │  │     ││ 0. 检查参数缓存     │  │
-││ 1. 人声分离 (UVR5)  │  │     ││ 1. 人声分离 (UVR5/ │  │
-││    或 (MSST)        │  │     ││    MSST)            │  │
-││ 2. 调用 RVC 推理    │  │     ││ 2. 调用 SVC 推理    │  │
-││ 3. 后处理 & 混音    │  │     ││ 3. 后处理 & 混音    │  │
-││ 4. 返回成品音频     │  │     ││ 4. 返回成品音频     │  │
-│  └────────┬──────────┘  │     │  └────────┬──────────┘  │
-└───────────┼─────────────┘     └───────────┼─────────────┘
-            │ 子进程调用                     │ HTTP API 调用
-            ▼                               ▼
-┌─────────────────────────┐     ┌─────────────────────────┐
-│       RVC 引擎          │     │     SVC-Fusion 引擎     │
-│  (Python WebUI 进程)    │     │  (Python WebUI 进程)    │
-│                         │     │                         │
-│  · 加载 .pth 模型       │     │  · 加载 .pth 模型       │
-│  · 特征提取 (Content)   │     │  · 特征提取 (Content)   │
-│  · F0 音高提取          │     │  · F0 音高提取          │
-│  · 检索增强推理         │     │  · 扩散/生成推理        │
-│  · 音色转换输出         │     │  · 音色转换输出         │
-└─────────────────────────┘     └─────────────────────────┘
-        AMD GPU                       AMD GPU
-    (DirectML / ZLUDA)           (DirectML / ZLUDA)
+```text
+用甘城喵音色从 QQ 音乐翻唱《起风了》
+用 RVC 第 2 个模型翻唱《晴天》，升 2 调
+列出现在可用的 SoulX 参考音色
 ```
 
-### 各组件职责
+## 进度、缓存和结果发送
 
-| 组件 | 角色 | 说明 |
-|------|------|------|
-| **AstrBot** | 聊天机器人框架 | 接收QQ消息、管理插件、调度LLM |
-| **matsuko_cover 插件** | 业务逻辑层 | 歌曲搜索、用户交互、参数管理、结果发送 |
-| **RVCSVC-API** | API 中间件 | 将 Gradio 接口封装为统一的 REST API，负责人声分离→推理→后处理→混音的完整流水线 |
-| **RVC 引擎** | 底层推理引擎 | 基于 Retrieval-based Voice Conversion 的 AI 变声 |
-| **SVC-Fusion 引擎** | 底层推理引擎 | 基于 So-VITS-SVC 的 AI 变声（需替换补丁文件） |
+- 支持接收 Gradio 的下载、人声分离、F0、逐段推理、混音和导出进度。
+- `progress_update_interval` 控制聊天提示频率，避免刷屏。
+- 中间层返回 `cache_hit` 时，插件会提示缓存命中并直接发送结果。
+- 默认先发送 QQ 语音；若失败且 `enable_send_file=true`，会继续发送音频文件。
+- QQ 音乐由插件先下载到本地，再提交给中间层；网易云歌曲可由对应中间层直接处理。
 
-### RVC 推理原理
+## 常见问题
 
-```
-原始人声 ──→ 特征提取 ──→ F0音高提取 ──→ 检索增强 ──→ 音色转换 ──→ 目标音色人声
-(ContentVec)   (rmvpe等)   (从索引库检索   (VC模型推理)
-                           相似特征向量)
-```
+### 无法连接后端
 
-1. **特征提取**：使用 ContentVec 模型将原始人声转换为语义特征向量（256维），提取语音的内容信息（说什么、怎么说的）
-2. **F0 音高提取**：使用 rmvpe/harvest/crepe 等算法提取基频曲线（音高轮廓），保留原始旋律
-3. **检索增强**：从预先构建的特征索引库中检索与输入最相似的目标音色特征，增强音色转换的稳定性和相似度
-4. **音色转换**：将内容特征 + F0曲线 + 检索特征送入 VC 模型，生成目标音色的语音
+确认对应端口正在监听，并检查插件配置中的 URL。SVCVC 必须先启动 SoulX 7861，再启动中间层 6666。
 
-> **RVC 的核心优势**：通过检索机制（Retrieval），即使在少量训练数据的情况下也能保持较高的音色相似度，有效减少音色泄漏。
+### 新增 SVCVC 音色后转换提示“不在 choices 中”
 
-### SVC (So-VITS-SVC) 推理原理
+音色列表 API 会动态扫描文件，但 Gradio 下拉选项可能仍是服务启动时的快照。重启 SVCVC-API-SVF 后再执行 `/刷新svcvc音色`。
 
-```
-原始人声 ──→ 特征提取 ──→ F0音高提取 ──→ 扩散/生成模型 ──→ 音色转换 ──→ 目标音色人声
-(ContentVec)   (fcpe等)    (浅层扩散或     (VITS 声码器)
-                           直接生成)
-```
+### SoulX 推理完成但机器人没有收到文件
 
-1. **特征提取**：同样使用 ContentVec 提取语音内容特征
-2. **F0 音高提取**：使用 fcpe/rmvpe 等算法提取基频
-3. **扩散/生成推理**：SVC-Fusion 支持两种推理模式——浅层扩散（Shallow Diffusion）和直接生成。扩散模式通过逐步去噪获得更精细的频谱细节
-4. **声码器合成**：使用 VITS 声码器将 Mel 频谱转换为波形音频
+请使用带 `/soulx_svc_convert_path` 接口的 AMD 补丁和最新版 SVCVC-API-SVF；该接口避免在同一台机器上通过 Gradio 重复下载大型 WAV。
 
-> **SVC 的核心优势**：扩散模型可以生成更细腻的频谱细节，理论上音质上限更高；但推理速度比 RVC 慢，且对训练数据量要求更高。
+### QQ 音乐无法获取播放地址
 
-### RVC vs SVC 对比
+普通歌曲优先使用 QQ 音乐接口。VIP/付费歌曲可选配置 `third_party_api_key`；默认值为空，仓库不包含任何 API 密钥。频繁触发风控时可调整重试设置。
 
-| 维度 | RVC | SVC (So-VITS-SVC) |
-|------|-----|-------------------|
-| **推理速度** | ⚡ 快（无扩散步骤） | 🐢 较慢（扩散需要多步迭代） |
-| **音色相似度** | 🎯 高（检索增强） | 🎯 高（依赖训练数据量） |
-| **音质上限** | 良好 | 🏆 理论更高（扩散细节） |
-| **训练数据要求** | 📦 少量即可（3-10分钟） | 📦 需要更多（10-30分钟+） |
-| **音色泄漏风险** | 🛡️ 低（检索机制抑制） | ⚠️ 较高（数据不足时） |
-| **F0 算法选择** | rmvpe, harvest, crepe, pm | fcpe, rmvpe, crepe, harvest, parselmouth, dio |
-| **推荐场景** | 日常翻唱、快速出结果 | 追求极致音质、有充足训练数据 |
+### SoulX 无法命中缓存
 
-### 完整翻唱流水线
+检查 `svcvc_random_seed` 是否关闭。歌曲内容、参考音色、种子、采样步数、CFG、升降调或模型资产变化都会生成新的缓存键。
 
-```
-用户发起请求
-    │
-    ├─ 传统命令模式：/rvc /svc /qqrvc /qqsvc
-    │   └─ 搜索歌曲 → 用户选择歌曲 → 展示模型 → 用户选择模型 → 开始推理
-    │
-    └─ LLM 智能模式：
-        ├─ smart_cover：一步到位，自动完成全部流程
-        ├─ batch_cover：多首歌曲排队异步处理
-        └─ 分步工具：search_music → rvc_cover/svc_cover
-            │
-            ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │                   插件处理阶段                           │
-    │  1. 歌曲搜索（网易云/QQ音乐 API）                        │
-    │  2. 下载原始音频文件                                     │
-    │  3. 构建 Gradio API 请求（模型、调音、F0算法等参数）       │
-    └──────────────────────────┬──────────────────────────────┘
-                               │ HTTP 调用 RVCSVC-API
-                               ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │                 RVCSVC-API 处理阶段                      │
-    │  4. 检查 temp/ 缓存（相同参数命中则直接返回）             │
-    │  5. 人声/伴奏分离（UVR5 或 MSST/BS-Roformer）            │
-    │  6. AI 音色转换（调用 RVC 或 SVC-Fusion 引擎）           │
-    │  7. 后处理（EQ均衡、动态压缩、混响、回声）                 │
-    │  8. 人声+伴奏混音导出并缓存到 temp/                       │
-    └──────────────────────────┬──────────────────────────────┘
-                               │ 返回成品音频路径
-                               ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │                   插件发送阶段                           │
-    │  9. 发送语音消息（Record）                               │
-    │ 10. 可选：发送文件附件（File，需开启 enable_send_file）    │
-    │ 11. 可选：发送配置报告（需开启 enable_config_report）      │
-    │ 12. 更新用户偏好数据                                     │
-    └─────────────────────────────────────────────────────────┘
-```
+## 更新日志
 
----
+### v2.7.1
 
-## ❓ 常见问题
-
-### Q1: 提示 "获取模型列表失败"
-
-**检查以下几点：**
-1. 对应的后端服务是否已启动（`rvcapi.bat` 或 `svcapi.bat`）
-2. 配置的后端地址是否正确（注意必须以 `/` 结尾）
-3. 防火墙是否拦截了端口
-4. 模型文件是否已放入正确目录
-
-### Q2: 生成超时怎么办？
-
-在插件配置中增大 `inference_timeout` 的值（默认 300 秒）。GPU 性能较差或歌曲较长时可能需要更长时间。
-
-### Q3: 模型列表为空
-
-1. 确保已将 `.pth` 模型文件放入后端的模型目录
-2. 使用 `/刷新rvc模型` 或 `/刷新svc模型` 命令重新加载
-3. 检查后端服务日志是否有报错
-
-### Q4: QQ 音乐搜不到歌或无法播放
-
-1. 确认 `enable_qqmusic` 已开启
-2. 确认已安装 `qqmusic-api-python`：`pip install qqmusic-api-python`
-3. **VIP / 付费歌曲**需要配置有效的 `third_party_api_key`（前往 [jkapi.com](https://jkapi.com) 注册获取）
-4. 如果频繁触发风控，可开启 `qqmusic_retry_on_ratelimit` 自动重试（默认开启，最多重试 3 次）
-
-### Q5: 音质不好或有杂音
-
-1. 检查原始歌曲音质
-2. 尝试调整升降调参数（通常 ±2 以内效果最好）
-3. 确保使用的模型训练质量良好
-4. 检查 UVR5 人声分离效果
-
-### Q6: 同时使用 RVC 和 SVC 会冲突吗？
-
-**不会。** 插件做了完整的文件隔离和处理，两个模式可以同时使用互不干扰。
-
-### Q7: LLM 强制模式下怎么翻唱？
-
-直接用自然语言对话即可，例如：
-- 「帮我翻唱《晴天》」
-- 「用SVC翻唱《孤勇者》，升2调」
-- 「用塔菲模型翻唱这三首歌：《A》《B》《C》」
-
-LLM 会自动调用对应的工具完成操作。
-
----
-
-## 📊 系统要求
-
-- 仅支持 Windows 系统
-- **仅支持 AMD 显卡 (支持 A卡 独显及内置的 AMD 核显/APU)**
-- （如果遇到缺少环境，请确保你已安装 ffmpeg 并配置了环境变量）
-
-| 项目 | 最低要求 | 推荐配置 |
-|------|---------|---------|
-| GPU | AMD 独立显卡 / AMD 核显 (APU) | 7900 XTX / 9070 XT 及以上 |
-| 显存 | 4GB | 8GB 及以上 |
-| 内存 | 8GB | 16GB 及以上 |
-| Python | 3.9+ | 3.10+ |
-| AstrBot | v0.7.0+ | 最新版 |
-
----
-
-## 📝 更新日志
+- 新增 SoulX-SVCVC 第三推理引擎和参考音色管理。
+- 新增 `/svcvc`、`/qqsvcvc`、`svcvc_cover` 及三引擎智能路由。
+- 新增固定/随机种子、SoulX 分离、自动变调、伴奏混合、采样步数和 CFG 配置。
+- 将 SoulX 的预处理、F0 和逐段推理进度发送到 QQ。
+- 支持中间层缓存标记，并在随机任务中避免误用持久缓存。
+- QQ 语音发送失败时继续尝试文件发送。
+- 新增 MSST 模型列出、切换和后端调试信息。
 
 ### v2.5.7
-- 🎵 **伴奏升调开关**：新增 `shift_accompaniment` 配置项，支持控制升降调时是否同步调整伴奏音高。开启后人声与伴奏同步升降；关闭时只调整人声，伴奏保持原调。
-- 🔧 **依赖补充**：`requirements.txt` 补充 `aiohttp` 和 `qqmusic-api-python`，避免新安装用户缺失依赖。
-- 🔧 **RVCSVC-API 后端同步更新**：
-  - 新增 `shift_accompaniment` API 参数（Gradio 隐藏组件），支持插件端控制伴奏音高调整。
-  - 混音阶段移除 `optimize_pitch_shift` 对伴奏的限制，±12 也会同步调整伴奏。
-  - SVC 中间层 `_call_gradio_sse` 硬编码 `127.0.0.1:7777` 改为从 `SVC_API_BASE` 解析。
-  - **新增智能结果缓存**：后端 `temp/` 目录按参数哈希缓存翻唱结果，相同参数二次请求秒级响应。
 
-### v2.5.6
-- 🔒 **安全修复**：移除硬编码的第三方 API 密钥，`third_party_api_key` 默认值改为空字符串，现需用户手动配置
-- 🧹 **启动自动清理**：插件启动时自动清理 `temp_audio` 目录下超过 24 小时的旧临时文件，防止磁盘堆积
-- 🐛 **缓存防泄漏**：性别识别缓存限制最多 100 条，超限时自动清理一半，防止长期运行内存无限增长
-- 🐛 **临时文件防冲突**：QQ 音乐下载临时文件名改用 UUID，避免多人同时点歌导致文件互相覆盖
-- 🐛 **异步异常捕获**：`_create_tracked_task` 现在会正确记录异步任务异常，不再静默吞掉错误日志
-- 🐛 **失败判断修复**：去除过于宽泛的 `"无法"` 关键词判断，减少成功消息被误判为失败的概率
-- 🐛 **配置容错**：`index_rate` 格式错误时不再导致插件崩溃，自动回退至默认值 0.75 并输出警告
-- 🧹 **代码优化**：`terminate()` 卸载时不再重复写保存逻辑，统一调用 `_save_preferences()`
+- 新增伴奏同步升降调开关。
+- 补充 QQ 音乐依赖。
+- 支持参数级中间层结果缓存。
 
-### v2.5.5
-- 🔄 **QQ音乐风控自动重试**：新增 `qqmusic_retry_on_ratelimit` 和 `qqmusic_retry_max_attempts` 配置项。当QQ音乐API触发风控时自动重试（默认开启，重试3次，每次间隔5秒），大幅提高QQ音乐成功率。
-- 🎵 **QQ音乐搜索/获取链接重试**：在 `_do_cover` 和 `_send_song` 方法中均加入重试逻辑，覆盖搜索和获取播放链接两个环节。
+更早版本记录可通过 Git 历史和 GitHub Releases 查看。
 
-### v2.5.4
-- ❌ **智能错误反馈**：QQ音乐源获取失败时，聊天窗口自动输出详细失败原因（VIP限制/API限制/网络问题）并给出解决方案。
-- 📢 **AI 状态同步修复**：翻唱失败时自动通知 AI，避免 AI 以为任务还在进行中。成功和失败都会通知 AI。
-- 🎵 **QQ音乐搜索失败提示优化**：`search_music` 工具在 QQ 音乐搜索失败时给出更明确的错误信息和替代方案。
-- 🐛 **修复版本号不一致**：统一 `main.py` 和 `metadata.yaml` 版本号为 v2.5.4。
+## 安全与版权
 
-### v2.5.2
-- 📎 **文件发送功能**：新增 `enable_send_file` 开关，开启后翻唱完成时除了发送语音消息外，还会以文件附件形式再发送一份到群聊，方便群友下载保存。
-- 🔇 **配置报告开关**：新增 `enable_config_report` 开关，关闭后翻唱完成时不再发送"已成功使用..."和"📊 本次配置"等文字消息，只发送音频文件。
-- 🐛 **修复网易云翻唱报错**：修复 `_send_song` 方法中 `song_name` 变量未定义导致 `UnboundLocalError` 的问题。
-- 🧹 **临时文件清理优化**：开启文件发送时延迟删除临时文件，避免 Windows 文件占用错误。
+- 不要把私人音色、歌曲、生成结果、Cookie 或 API Key 提交到公开仓库。
+- 使用者应确保对参考音频、歌曲和生成内容拥有相应授权，并遵守所在地区法律及平台规则。
+- 本插件和相关模型可能产生模仿特定人物的声音，请勿用于冒充、欺骗、骚扰或其他侵权行为。
 
-### v2.5.0
-- 🎛️ **RVC/SVC 智能混响与回声控制**：新增 `reverb_intensity` (混响强度) 和 `delay_intensity` (回声/延迟强度) 配置项，支持 0~10 级调节。回声效果会自动检测歌曲 BPM 进行同步，让翻唱音频更具空间感和立体感。同时对 RVC 和 SVC 引擎生效！
-- 🎵 **RVC F0 音高算法配置**：新增 `f0_method` 配置项，支持 `rmvpe`（默认，效果最好）、`harvest`（对电音/Auto-Tune 人声容忍度更高）、`crepe`（效果好但吃 GPU，DirectML 不可用）、`pm`（速度最快）四种算法。遇到电音人声跑调时可切换为 `harvest`。
-- 🎵 **SVC F0 音高算法配置**：新增 `svc_f0_method` 配置项，支持 `fcpe`（默认，SVC 推荐）、`rmvpe`、`crepe`、`harvest`、`parselmouth`、`dio` 六种算法。
-- ⏳ **子进度显示优化**：分离人声阶段现在会显示子进度百分比（如"分离人声 70%"），不再与总进度混淆。
-- 🐛 **进度条双重百分比修复**：修复了"分离人声中: 70% (54%)"的双重百分比显示问题，区分子进度和总进度。
+## 许可证
 
-### v2.4.3
-- 🗣️ **LLM 完工通知**：新增 `enable_llm_success_notify` 开关。后台生成完音频后，会主动告知大语言模型，让猫娘（或其他设定人设）自己来给你报喜！
+本仓库使用 [GNU Affero General Public License v3.0](LICENSE)。第三方项目、模型、音乐和 API 分别受其自身许可证及服务条款约束。
 
-### v2.4.2
-- 🛠️ **匹配算法重构**：引入多维度智能打分机制（词语命中、歌名优先、歌手加权），放弃贪婪拦截，彻底解决歌手匹配时“选错歌”的问题。
-- ⚙️ **传参优化**：修复 `batch_cover` (方案D) 批量翻唱时缺失音乐源传递的 Bug，现支持跨平台（如 QQ音乐）批量任务。
-- 🌐 **繁简兼容**：优化匹配引擎对日文汉字繁简体的识别兼容。
+## 致谢
 
-### v2.4.1
-- 🎯 **精准歌手匹配**：修复自然语言点歌时 LLM 丢失歌手信息的问题，新增多维度智能打分算法。
-- ⏳ **实时进度条**：支持截获后端的处理进度（分离人声和推理），并实时反馈到聊天窗口。
-- ⚙️ **防刷屏设置**：新增 `enable_progress_bar` 和 `progress_update_interval` 进度条相关配置项。
-
-### v2.3.0
-- 🎵 新增 QQ 音乐支持（搜索 + 翻唱）
-- 🎵 新增 `/qqrvc`、`/qqsvc`、`/qq点歌` 命令
-- 🎵 新增 16+ 平台音乐搜索能力（酷狗、酷我、百度等）
-- 🎵 新增 `disable_netease` 配置，可完全禁用网易云
-- 🎵 smart_cover 支持指定音乐源 (`music_source` 参数)
-- 🏷️ 新增模型名称模糊匹配功能（支持中文别名）
-
-### v2.2.0
-- 🧠 新增方案 E：偏好学习与推荐系统
-- 📊 新增个人统计功能（`view_my_stats`、`clear_my_history`）
-- 💾 用户偏好持久化存储（JSON 文件）
-
-### v2.0.0 — 🎉 全面升级
-- ✨ 方案 A：智能单步翻唱 `smart_cover`
-- ✨ 方案 B：增强上下文记忆
-- ✨ 方案 C：确认机制（自然语言交互）
-- ✨ 方案 D：批量翻唱 `batch_cover`（异步执行）
-- 🔒 LLM 强制模式开关
-- ⚙️ 所有功能独立开关控制
-
-### v1.1.0
-- 首次支持 LLM Function Calling
-- 提供 search_music、rvc_cover、svc_cover、get_available_models 工具
-
-### v1.0.0
-- 初始版本，基础命令行翻唱功能（/rvc、/svc）
-
----
-
-## 📝 许可证
-
-本项目仅供学习和研究使用，请勿用于商业用途或侵犯他人权益。
-
-## 🙏 致谢
-
-- [AstrBot](https://github.com/Soulter/AstrBot) — 强大的跨平台聊天机器人框架
-- [RVC](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) — RVC 语音转换项目
-- [so-vits-svc](https://github.com/svc-develop-team/so-vits-svc) — SVC 语音转换项目（已过时）
-- [UVR5](https://github.com/Anjok07/ultimatevocalremovergui) — 人声分离工具
-- [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) — 网易云音乐 API
-- [RVCSVC-API](https://github.com/CCYellowStar2/RVCSVC-API) — RVC/SVC 后端 API 整合 （旧链接）
-- [原作者项目](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc) — 非常感谢提供灵感
+- [AstrBot](https://github.com/AstrBotDevs/AstrBot)
+- [CCYellowStar2/astrbot_plugin_rvc_svc](https://github.com/CCYellowStar2/astrbot_plugin_rvc_svc)
+- [RVC-Project/Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)
+- [Soul-AILab/SoulX-Singer](https://github.com/Soul-AILab/SoulX-Singer)
+- [svc-develop-team/so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)
+- [Anjok07/ultimatevocalremovergui](https://github.com/Anjok07/ultimatevocalremovergui)
