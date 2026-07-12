@@ -61,6 +61,10 @@ pip install gradio_client aiohttp qqmusic-api-python
 
 ### 1. 下载 RVCSVC-API 后端整合包
 
+🎉 **RVCSVC-API v1.2.3 更新内容：**
+- **智能结果缓存**：中间层新增参数级结果缓存机制。`temp/` 目录自动缓存已生成的翻唱结果，同一首歌使用**相同参数**再次请求时直接返回缓存文件，**秒级响应**，无需重新走推理引擎。更换模型、调整升降调、修改混响/延迟等任意参数会自动触发重新推理并生成新缓存。
+- **启动端口统一**：RVC 中间层固定端口 `3333`，SVC 中间层固定端口 `9999`，与插件默认配置对齐。
+
 🎉 **RVCSVC-API v1.2.2 更新内容：**
 - **伴奏升调开关**：新增 `shift_accompaniment` 参数，支持控制升降调时是否同步调整伴奏音高。开启时人声和伴奏同步升降；关闭时只调整人声，伴奏保持原调。
 - **升降调范围放宽**：混音阶段不再使用 `optimize_pitch_shift` 限制伴奏调整范围，传入 ±12 时伴奏也会同步升降一个八度。
@@ -97,8 +101,8 @@ pip install gradio_client aiohttp qqmusic-api-python
 解压您下载的整合包后，无需进行任何安装，里面已经内置了开箱即用的完整环境：
 
 - **启动服务**：根据需要双击启动对应的服务：
-   - 仅使用 RVC：运行 `启动 rvcapi.bat` (默认端口 7860)
-   - 仅使用 SVC：运行 `启动 svcapi.bat` (默认端口 7866)
+   - 仅使用 RVC：运行 `启动 rvcapi.bat` (默认端口 **3333**)
+   - 仅使用 SVC：运行 `启动 svcapi.bat` (默认端口 **9999**)
    - 两个都要用：**同时运行这两个 bat 文件**
 
 > ⚠️ **注意**：启动 API 的同时，您的底层 RVC 或 SVC 引擎也必须处于运行状态，API 中间件会将任务转发给底层引擎执行。
@@ -136,12 +140,24 @@ pip install gradio_client aiohttp qqmusic-api-python
 | `/刷新svc模型` | 从 SVC 后端刷新模型列表 | 所有人 |
 | `/设置svc后端链接 <URL>` | 设置 SVC 后端地址 | **管理员** |
 
+#### SoulX-SVCVC 参考音色翻唱命令
+
+| 命令 | 说明 | 权限 |
+|------|------|------|
+| `/svcvc <歌名> [升降调]` | 用 SoulX-Singer SVC Voice Conversion 点歌（-36～36） | 所有人 |
+| `/qqsvcvc <歌名> [升降调]` | 用 QQ 音乐 + SoulX-SVCVC 点歌 | 所有人 |
+| `/刷新svcvc音色` | 从 `SVCVC-API/voice_profiles` 刷新参考音色 | 所有人 |
+| `/设置svcvc后端链接 <URL>` | 设置 SVCVC-API 地址 | **管理员** |
+
+参考音频直接放进 `SVCVC-API/voice_profiles`；文件名（不含扩展名）就是音色 ID，也可添加同名 JSON 设置显示名与说明。
+
 #### QQ 音乐命令
 
 | 命令 | 说明 | 前提条件 |
 |------|------|----------|
 | `/qqrvc <歌名>` | 用 QQ 音乐 + RVC 翻唱 | 开启 `enable_qqmusic` |
 | `/qqsvc <歌名>` | 用 QQ 音乐 + SVC 翻唱 | 开启 `enable_qqmusic` |
+| `/qqsvcvc <歌名>` | 用 QQ 音乐 + SoulX-SVCVC 翻唱 | 开启 `enable_qqmusic` 与 `enable_svcvc` |
 | `/qq点歌 <关键词>` | 在 QQ 音乐搜索歌曲 | 开启 `enable_qqmusic` |
 
 #### 参数说明
@@ -248,7 +264,8 @@ AI 会记住你的喜好，下次翻唱时自动应用：
 | `search_music` | 搜索歌曲 | 支持指定关键词和返回数量 |
 | `rvc_cover` | RVC 翻唱 | 单独使用 RVC 模型翻唱 |
 | `svc_cover` | SVC 翻唱 | 单独使用 SVC 模型翻唱 |
-| `get_available_models` | 查看模型列表 | 查看 RVC/SVC 所有可用模型及别名 |
+| `svcvc_cover` | SoulX-SVCVC 翻唱 | 选择参考音色点歌并报告实际种子 |
+| `get_available_models` | 查看模型列表 | 查看 RVC/SVC/SVCVC 所有可用模型、音色及别名 |
 | `save_preference` | 保存偏好 | 记住用户的常用配置 |
 | `get_recommendation` | 获取推荐 | 基于历史数据推荐配置 |
 | `view_my_stats` | 个人统计 | 查看完整使用报告 |
@@ -293,8 +310,12 @@ AI 会记住你的喜好，下次翻唱时自动应用：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `rvc_base_url` | string | `http://127.0.0.1:7860/` | RVC API Gradio 后端地址（必须以 `/` 结尾） |
-| `svc_base_url` | string | `http://127.0.0.1:7866/` | SVC API Gradio 后端地址（必须以 `/` 结尾） |
+| `rvc_base_url` | string | `http://127.0.0.1:3333/` | RVC API Gradio 后端地址（必须以 `/` 结尾） |
+| `svc_base_url` | string | `http://127.0.0.1:9999/` | SVC API Gradio 后端地址（必须以 `/` 结尾） |
+| `svcvc_base_url` | string | `http://127.0.0.1:6666/` | SoulX-SVCVC 中间层地址（必须以 `/` 结尾） |
+| `enable_rvc` | bool | `true` | 启用 RVC 引擎 |
+| `enable_svc` | bool | `true` | 启用旧 SVC-Fusion 引擎 |
+| `enable_svcvc` | bool | `false` | 启用 SoulX-SVCVC 参考音色引擎 |
 
 ### 音乐源配置
 
@@ -321,8 +342,23 @@ AI 会记住你的喜好，下次翻唱时自动应用：
 |--------|------|--------|------|
 | `rvc_models_keywords` | list | `[]` | RVC 模型别名列表，格式：`模型文件名\|\|\|别名`，每行一个 |
 | `svc_models_keywords` | list | `[]` | SVC 模型别名列表，格式同上 |
+| `svcvc_models_keywords` | list | `[]` | SoulX 参考音色别名，格式：`音色ID\|\|\|别名` |
 
-> 使用 `/刷新rvc模型` 或 `/刷新svc模型` 命令可自动从后端获取模型列表并填充此配置。
+> 使用 `/刷新rvc模型`、`/刷新svc模型` 或 `/刷新svcvc音色` 可自动填充对应列表。
+
+### SoulX-SVCVC 参数
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `svcvc_prompt_vocal_sep` | `false` | 参考音频是否先分离人声 |
+| `svcvc_target_vocal_sep` | `true` | 目标歌曲是否先分离人声 |
+| `svcvc_auto_shift` | `true` | 自动匹配音域 |
+| `svcvc_auto_mix_acc` | `true` | 自动混回伴奏 |
+| `svcvc_pitch_shift` | `0` | 指定变调，-36～36 |
+| `svcvc_n_step` | `32` | 采样步数，1～200 |
+| `svcvc_cfg` | `1.0` | CFG 系数，0～10 |
+| `svcvc_seed` | `42` | 固定种子，0～10000 |
+| `svcvc_random_seed` | `false` | 每任务生成并报告实际种子；随机任务不写持久缓存 |
 
 **模型别名格式示例：**
 
@@ -356,7 +392,7 @@ hoshino.pth|||星野
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `default_api_type` | string | `rvc` | 默认翻唱类型：`rvc` 或 `svc` |
+| `default_api_type` | string | `rvc` | 默认翻唱类型：`rvc`、`svc` 或 `svcvc` |
 | `default_model_index` | int | `1` | 默认模型序号（从 1 开始） |
 | `default_key_shift` | int | `0` | 默认音调调整（-12 到 12） |
 | `f0_method` | string | `rmvpe` | RVC 音高提取算法：`rmvpe`（默认，效果最好）/ `harvest`（电音人声推荐）/ `crepe`（吃GPU，DML不可用）/ `pm`（最快） |
@@ -439,10 +475,11 @@ hoshino.pth|||星野
               ▼                               ▼
 ┌─────────────────────────┐     ┌─────────────────────────┐
 │    RVCSVC-API (RVC)     │     │    RVCSVC-API (SVC)     │
-│    端口: 7860           │     │    端口: 7866           │
+│    端口: 3333           │     │    端口: 9999           │
 │                         │     │                         │
 │  Gradio API 中间件      │     │  Gradio API 中间件      │
 │  ┌───────────────────┐  │     │  ┌───────────────────┐  │
+││ 0. 检查参数缓存     │  │     ││ 0. 检查参数缓存     │  │
 ││ 1. 人声分离 (UVR5)  │  │     ││ 1. 人声分离 (UVR5/ │  │
 ││    或 (MSST)        │  │     ││    MSST)            │  │
 ││ 2. 调用 RVC 推理    │  │     ││ 2. 调用 SVC 推理    │  │
@@ -542,19 +579,20 @@ hoshino.pth|||星野
                                ▼
     ┌─────────────────────────────────────────────────────────┐
     │                 RVCSVC-API 处理阶段                      │
-    │  4. 人声/伴奏分离（UVR5 或 MSST/BS-Roformer）            │
-    │  5. AI 音色转换（调用 RVC 或 SVC-Fusion 引擎）           │
-    │  6. 后处理（EQ均衡、动态压缩、混响、回声）                 │
-    │  7. 人声+伴奏混音导出                                    │
+    │  4. 检查 temp/ 缓存（相同参数命中则直接返回）             │
+    │  5. 人声/伴奏分离（UVR5 或 MSST/BS-Roformer）            │
+    │  6. AI 音色转换（调用 RVC 或 SVC-Fusion 引擎）           │
+    │  7. 后处理（EQ均衡、动态压缩、混响、回声）                 │
+    │  8. 人声+伴奏混音导出并缓存到 temp/                       │
     └──────────────────────────┬──────────────────────────────┘
                                │ 返回成品音频路径
                                ▼
     ┌─────────────────────────────────────────────────────────┐
     │                   插件发送阶段                           │
-    │  8. 发送语音消息（Record）                               │
-    │  9. 可选：发送文件附件（File，需开启 enable_send_file）    │
-    │ 10. 可选：发送配置报告（需开启 enable_config_report）      │
-    │ 11. 更新用户偏好数据                                     │
+    │  9. 发送语音消息（Record）                               │
+    │ 10. 可选：发送文件附件（File，需开启 enable_send_file）    │
+    │ 11. 可选：发送配置报告（需开启 enable_config_report）      │
+    │ 12. 更新用户偏好数据                                     │
     └─────────────────────────────────────────────────────────┘
 ```
 
@@ -634,6 +672,7 @@ LLM 会自动调用对应的工具完成操作。
   - 新增 `shift_accompaniment` API 参数（Gradio 隐藏组件），支持插件端控制伴奏音高调整。
   - 混音阶段移除 `optimize_pitch_shift` 对伴奏的限制，±12 也会同步调整伴奏。
   - SVC 中间层 `_call_gradio_sse` 硬编码 `127.0.0.1:7777` 改为从 `SVC_API_BASE` 解析。
+  - **新增智能结果缓存**：后端 `temp/` 目录按参数哈希缓存翻唱结果，相同参数二次请求秒级响应。
 
 ### v2.5.6
 - 🔒 **安全修复**：移除硬编码的第三方 API 密钥，`third_party_api_key` 默认值改为空字符串，现需用户手动配置

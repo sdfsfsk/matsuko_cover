@@ -64,6 +64,10 @@ class NetEaseMusicAPI:
         url = "http://music.163.com/api/search/get/web"
         data = {"s": keyword, "limit": limit, "type": 1, "offset": 0}
         result = await self._request(url, data=data, method="POST")
+        if not isinstance(result, dict) or "result" not in result or not result["result"]:
+            logger.warning(f"网易云API搜索返回异常格式: {result}")
+            return []
+        songs = result["result"].get("songs", []) or []
         return [
             {
                 "id": song["id"],
@@ -71,7 +75,7 @@ class NetEaseMusicAPI:
                 "artists": "、".join(artist["name"] for artist in song["artists"]),
                 "duration": song["duration"],
             }
-            for song in result["result"]["songs"][:limit]
+            for song in songs[:limit]
         ]
 
     async def fetch_comments(self, song_id: int):
@@ -139,6 +143,10 @@ class NetEaseMusicAPINodeJs:
         data = {"keywords": keyword, "limit": limit, "type": 1, "offset": 0}
 
         result = await self._request(url, data=data, method="POST")
+        if not isinstance(result, dict) or "result" not in result or not result["result"]:
+            logger.warning(f"网易云NodeJs API搜索返回异常格式: {result}")
+            return []
+        songs = result["result"].get("songs", []) or []
         res = [
             {
                 "id": song["id"],
@@ -146,7 +154,7 @@ class NetEaseMusicAPINodeJs:
                 "artists": "、".join(artist["name"] for artist in song["artists"]),
                 "duration": song["duration"],
             }
-            for song in result["result"]["songs"][:limit]
+            for song in songs[:limit]
         ]
 
         return res
@@ -422,6 +430,9 @@ class MusicSearcher:
             ) as response:
                 if response.status == 200:
                     result = await response.json()
+                    if not isinstance(result, dict) or "songs" not in result or not result["songs"]:
+                        logger.warning(f"聚合音乐API搜索返回异常格式: {result}")
+                        return []
                     return [
                         {
                             "id": song["songid"],
