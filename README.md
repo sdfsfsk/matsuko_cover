@@ -77,11 +77,12 @@ qqmusic-api-python
 |---|---|---|---|
 | [RVCSVC-API-amd](https://github.com/sdfsfsk/RVCSVC-API-amd) | UVR5 / HP5 | DirectML | 环境较轻、兼容范围较广 |
 | [RVCSVC-API-MSST](https://github.com/sdfsfsk/RVCSVC-API-MSST) | BS-Roformer / MSST | Windows AMD ROCm 7.2.1 | 更高分离质量、显存需求更高 |
+| [SVCVC-API-SVF](https://github.com/sdfsfsk/SVCVC-API-SVF) | SoulX-Singer 内置分离 | 轻量中间层 + 上游 Windows AMD ROCm | 零样本参考音色转换 |
 
 > [!CAUTION]
-> **上述两个中间层版本都只支持 Windows AMD 显卡（A 卡）。NVIDIA、Intel GPU 和纯 CPU 环境不在支持范围内。** 两个项目使用相同的 3333/9999 端口，只需选择其中一个，不能同时启动。
+> **完整推理方案仅支持 Windows AMD 显卡（A 卡），NVIDIA、Intel GPU 和纯 CPU 环境不在支持范围内。** `RVCSVC-API-amd` 与 `RVCSVC-API-MSST` 使用相同的 3333/9999 端口，只需选择其中一个，不能同时启动；`SVCVC-API-SVF` 使用 6666 端口，可以与前两者之一同时运行，但还需要应用 AMD 补丁的 SoulX-Singer 上游。
 
-公开仓库只包含源码和环境安装脚本，不包含 Python/ROCm 运行时、UVR5/MSST 权重、RVC/SVC 模型或歌曲缓存。请按照各项目 README 准备环境和分离模型。
+公开仓库只包含源码和环境安装脚本，不包含已安装的 Python/ROCm 运行时、UVR5/MSST 权重、RVC/SVC/SoulX 模型、私人参考音色或歌曲缓存。请按照各项目 README 准备环境、上游引擎和分离模型。
 
 ### RVC
 
