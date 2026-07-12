@@ -69,16 +69,32 @@ qqmusic-api-python
 
 ## 后端准备
 
+### 中间层源码下载
+
+旧版 README 中的百度网盘整合包不再作为主要下载入口，请直接使用以下公开项目：
+
+| 项目 | 人声分离 | GPU 后端 | 适合场景 |
+|---|---|---|---|
+| [RVCSVC-API-amd](https://github.com/sdfsfsk/RVCSVC-API-amd) | UVR5 / HP5 | DirectML | 环境较轻、兼容范围较广 |
+| [RVCSVC-API-MSST](https://github.com/sdfsfsk/RVCSVC-API-MSST) | BS-Roformer / MSST | Windows AMD ROCm 7.2.1 | 更高分离质量、显存需求更高 |
+
+> [!CAUTION]
+> **上述两个中间层版本都只支持 Windows AMD 显卡（A 卡）。NVIDIA、Intel GPU 和纯 CPU 环境不在支持范围内。** 两个项目使用相同的 3333/9999 端口，只需选择其中一个，不能同时启动。
+
+公开仓库只包含源码和环境安装脚本，不包含 Python/ROCm 运行时、UVR5/MSST 权重、RVC/SVC 模型或歌曲缓存。请按照各项目 README 准备环境和分离模型。
+
 ### RVC
 
 - 插件默认中间层：`http://127.0.0.1:3333/`
-- 启动 RVC 上游和对应 RVCSVC-API 中间层。
+- 从 [RVCSVC-API-amd](https://github.com/sdfsfsk/RVCSVC-API-amd) 或 [RVCSVC-API-MSST](https://github.com/sdfsfsk/RVCSVC-API-MSST) 选择一个中间层。
+- 启动 RVC 上游和所选中间层。
 - 使用 `/刷新rvc模型` 读取模型列表。
 
 ### SVC-Fusion
 
 - 插件默认中间层：`http://127.0.0.1:9999/`
-- 启动 SVC-Fusion 上游和对应 RVCSVC-API 中间层。
+- 从 [RVCSVC-API-amd](https://github.com/sdfsfsk/RVCSVC-API-amd) 或 [RVCSVC-API-MSST](https://github.com/sdfsfsk/RVCSVC-API-MSST) 选择一个中间层。
+- 启动 SVC-Fusion 上游和所选中间层。
 - 兼容补丁参考：[sdfsfsk/SVC-Fusion-fix](https://github.com/sdfsfsk/SVC-Fusion-fix)
 - 使用 `/刷新svc模型` 读取模型列表。
 
