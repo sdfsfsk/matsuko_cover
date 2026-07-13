@@ -43,7 +43,7 @@ class MusicPlugin(Star):
         
         self.rvc_base_url = config.get("rvc_base_url", "http://127.0.0.1:3333/")
         self.svc_base_url = config.get("svc_base_url", "http://127.0.0.1:9999/")
-        self.svcvc_base_url = config.get("svcvc_base_url", "http://127.0.0.1:6666/")
+        self.svcvc_base_url = config.get("svcvc_base_url", "http://127.0.0.1:6767/")
         
         self.default_api = config.get("default_api", "netease_nodejs")
         self.nodejs_base_url = config.get("nodejs_base_url", "https://163api.qijieya.cn")

@@ -14,8 +14,8 @@
   "svcvc_base_url": {
     "description": "SoulX-SVCVC 中间层地址",
     "type": "string",
-    "hint": "SVCVC-API 的 Gradio 地址，默认端口 6666，必须以 / 结尾。它会调用 SoulX-Singer 的 7861 端口。",
-    "default": "http://127.0.0.1:6666/"
+    "hint": "SVCVC-API 的 Gradio 地址，默认端口 6767，必须以 / 结尾。它会调用 SoulX-Singer 的 7861 端口。",
+    "default": "http://127.0.0.1:6767/"
   },
   "default_api": {
     "description": "默认使用的音乐 API",

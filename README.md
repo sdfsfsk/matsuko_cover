@@ -42,7 +42,7 @@ flowchart LR
     AstrBot --> Plugin[matsuko_cover]
     Plugin --> RVCAPI[RVC Gateway :3333]
     Plugin --> SVCAPI[SVC Gateway :9999]
-    Plugin --> SVCVC[SVCVC-API-SVF :6666]
+    Plugin --> SVCVC[SVCVC-API-SVF :6767]
     RVCAPI --> RVC[RVC :2333]
     SVCAPI --> SVC[SVC-Fusion :7777]
     SVCVC --> SoulX[SoulX-Singer SVC :7861]
@@ -83,7 +83,7 @@ qqmusic-api-python
 | [SVCVC-API-SVF](https://github.com/sdfsfsk/SVCVC-API-SVF) | SoulX-Singer 内置分离 | 轻量中间层 + 上游 Windows AMD ROCm | 零样本参考音色转换 |
 
 > [!CAUTION]
-> **完整推理方案仅支持 Windows AMD 显卡（A 卡），NVIDIA、Intel GPU 和纯 CPU 环境不在支持范围内。** `RVCSVC-API-amd` 与 `RVCSVC-API-MSST` 使用相同的 3333/9999 端口，只需选择其中一个，不能同时启动；`SVCVC-API-SVF` 使用 6666 端口，可以与前两者之一同时运行，但还需要应用 AMD 补丁的 SoulX-Singer 上游。
+> **完整推理方案仅支持 Windows AMD 显卡（A 卡），NVIDIA、Intel GPU 和纯 CPU 环境不在支持范围内。** `RVCSVC-API-amd` 与 `RVCSVC-API-MSST` 使用相同的 3333/9999 端口，只需选择其中一个，不能同时启动；`SVCVC-API-SVF` 使用 6767 端口，可以与前两者之一同时运行，但还需要应用 AMD 补丁的 SoulX-Singer 上游。
 
 公开仓库只包含源码和环境安装脚本，不包含已安装的 Python/ROCm 运行时、UVR5/MSST 权重、RVC/SVC/SoulX 模型、私人参考音色或歌曲缓存。请按照各项目 README 准备环境、上游引擎和分离模型。
 
@@ -108,13 +108,13 @@ SoulX-SVCVC 使用参考音频进行零样本音色转换，不需要训练 `.pt
 
 - 中间层：[sdfsfsk/SVCVC-API-SVF](https://github.com/sdfsfsk/SVCVC-API-SVF)
 - Windows AMD ROCm 补丁：[sdfsfsk/SoulX-Singer-AMD-Patch](https://github.com/sdfsfsk/SoulX-Singer-AMD-Patch)
-- 插件默认中间层：`http://127.0.0.1:6666/`
+- 插件默认中间层：`http://127.0.0.1:6767/`
 - SoulX-Singer SVC 上游：`http://127.0.0.1:7861/`
 
 启动顺序：
 
 1. 启动 SoulX-Singer，选择 `SVC voice conversion`，等待 7861 就绪。
-2. 启动 SVCVC-API-SVF，等待 6666 就绪。
+2. 启动 SVCVC-API-SVF，等待 6767 就绪。
 3. 在插件配置中开启 `enable_svcvc`。
 4. 使用 `/刷新svcvc音色`。
 
@@ -137,7 +137,7 @@ SoulX-SVCVC 使用参考音频进行零样本音色转换，不需要训练 `.pt
 |---|---:|---|
 | `rvc_base_url` | `http://127.0.0.1:3333/` | RVC 中间层 |
 | `svc_base_url` | `http://127.0.0.1:9999/` | SVC-Fusion 中间层 |
-| `svcvc_base_url` | `http://127.0.0.1:6666/` | SoulX-SVCVC 中间层 |
+| `svcvc_base_url` | `http://127.0.0.1:6767/` | SoulX-SVCVC 中间层 |
 | `enable_rvc` | `true` | 启用 RVC |
 | `enable_svc` | `true` | 启用 SVC-Fusion |
 | `enable_svcvc` | `false` | 启用 SoulX-SVCVC |
@@ -240,7 +240,7 @@ SoulX 在 AMD 上处理长歌曲时建议把 `inference_timeout` 和任务超时
 
 ### 无法连接后端
 
-确认对应端口正在监听，并检查插件配置中的 URL。SVCVC 必须先启动 SoulX 7861，再启动中间层 6666。
+确认对应端口正在监听，并检查插件配置中的 URL。SVCVC 必须先启动 SoulX 7861，再启动中间层 6767。
 
 ### 新增 SVCVC 音色后转换提示“不在 choices 中”
 
