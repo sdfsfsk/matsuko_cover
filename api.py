@@ -32,19 +32,19 @@ class NetEaseMusicAPI:
     @property
     def session(self):
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20))
         return self._session
 
     async def _request(
         self,
         url: str,
-        data: dict = {},
+        data: dict | None = None,
         method: str = "GET",
     ):
         """统一请求接口"""
         if method.upper() == "POST":
             async with self.session.post(
-                url, headers=self.header, cookies=self.cookies, data=data
+                url, headers=self.header, cookies=self.cookies, data=data or {}
             ) as response:
                 if response.headers.get("Content-Type") == "application/json":
                     return await response.json()
@@ -107,7 +107,8 @@ class NetEaseMusicAPI:
             "audio_url": result.get("music_url"),
         }
     async def close(self):
-        await self.session.close()
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
 class NetEaseMusicAPINodeJs:
     """
     网易云音乐API NodeJs版本
@@ -120,12 +121,14 @@ class NetEaseMusicAPINodeJs:
     @property
     def session(self):
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(self.base_url)
+            self._session = aiohttp.ClientSession(
+                self.base_url, timeout=aiohttp.ClientTimeout(total=20)
+            )
         return self._session
 
-    async def _request(self, url: str, data: dict = {}, method: str = "GET"):
+    async def _request(self, url: str, data: dict | None = None, method: str = "GET"):
         if method.upper() == "POST":
-            async with self.session.post(url, data=data) as response:
+            async with self.session.post(url, data=data or {}) as response:
                 if response.headers.get("Content-Type") == "application/json":
                     return await response.json()
                 else:
@@ -185,7 +188,8 @@ class NetEaseMusicAPINodeJs:
             "audio_url": result["data"][0].get("url", "")
         }
     async def close(self):
-        await self.session.close()
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
 
 
 class QQMusicAPI:

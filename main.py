@@ -33,7 +33,7 @@ MODEL_ALIAS_SEPARATOR = "|||"
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
     "RVC/SVC/SoulX-SVCVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈、QQ音乐风控自动重试）",
-    "2.7.1",
+    "2.8.0",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
@@ -116,6 +116,7 @@ class MusicPlugin(Star):
         self.reverb_intensity = config.get("reverb_intensity", 4)
         self.delay_intensity = config.get("delay_intensity", 0)
         self.shift_accompaniment = config.get("shift_accompaniment", True)
+        self.vocal_postprocess = bool(config.get("vocal_postprocess", False))
 
         # === SoulX-Singer SVC Voice Conversion 参数 ===
         self.svcvc_prompt_vocal_sep = bool(config.get("svcvc_prompt_vocal_sep", False))
@@ -234,7 +235,8 @@ class MusicPlugin(Star):
         except Exception as e:
             record_error = e
             logger.error(f"QQ语音发送失败，将继续尝试发送文件: {e}")
-        if self.enable_send_file:
+        # 配置开启时额外发送文件；即使未开启，QQ 语音失败也必须自动兜底。
+        if self.enable_send_file or not record_sent:
             try:
                 file_name = os.path.basename(result_path)
                 name, ext = os.path.splitext(file_name)
@@ -435,15 +437,11 @@ class MusicPlugin(Star):
             comp_type = type(comp).__name__
             logger.debug(f"[LocalAudio] 检查消息组件 {idx}: {comp_type}")
             
-            if isinstance(comp, (Record, File)):
+            if isinstance(comp, Record):
                 file_path = getattr(comp, "file_", None) or getattr(comp, "file", None)
                 file_url = getattr(comp, "url", None)
                 file_name = getattr(comp, "name", "")
                 
-                # 如果是 File 组件但不是音频文件，跳过
-                if isinstance(comp, File) and not self._is_audio_file(file_name) and not self._is_audio_file(file_path):
-                    continue
-                    
                 logger.info(f"[LocalAudio] 发现语音/音频消息: file={file_path}, url={file_url}")
                 
                 # 优先使用本地路径
@@ -541,8 +539,21 @@ class MusicPlugin(Star):
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
                     if resp.status == 200:
+                        max_bytes = int(float(self.max_local_audio_size_mb) * 1024 * 1024)
+                        content_length = int(resp.headers.get("Content-Length") or 0)
+                        if content_length > max_bytes:
+                            logger.warning(
+                                f"下载的音频过大: {content_length / 1024 / 1024:.1f}MB，已拒绝"
+                            )
+                            return None
+                        written = 0
                         with open(dest, "wb") as f:
                             async for chunk in resp.content.iter_chunked(8192):
+                                written += len(chunk)
+                                if written > max_bytes:
+                                    raise ValueError(
+                                        f"下载的音频超过 {self.max_local_audio_size_mb}MB 限制"
+                                    )
                                 f.write(chunk)
                         size_mb = os.path.getsize(dest) / (1024 * 1024)
                         if size_mb > self.max_local_audio_size_mb:
@@ -553,6 +564,11 @@ class MusicPlugin(Star):
                     else:
                         logger.warning(f"下载音频失败: HTTP {resp.status}")
         except Exception as e:
+            if 'dest' in locals() and os.path.isfile(dest):
+                try:
+                    os.remove(dest)
+                except OSError:
+                    pass
             logger.error(f"下载音频异常: {e}")
         return None
 
@@ -583,12 +599,15 @@ class MusicPlugin(Star):
         """安全获取Gradio Client，确保正确关闭"""
         client = None
         try:
-            client = Client(base_url, verbose=False, analytics_enabled=False)
+            # Client 初始化会同步读取 /config；放到线程池，避免阻塞 AstrBot 事件循环。
+            client = await asyncio.to_thread(
+                Client, base_url, verbose=False, analytics_enabled=False
+            )
             yield client
         finally:
             if client is not None:
                 try:
-                    client.close()
+                    await asyncio.to_thread(client.close)
                 except Exception as e:
                     logger.debug(f"关闭Gradio Client时出错: {e}")
 
@@ -630,7 +649,8 @@ class MusicPlugin(Star):
             f"tta={kwargs.get('msst_use_tta', 'backend-default')}"
         )
         loop = asyncio.get_running_loop()
-        job = client.submit(*args, **kwargs)
+        job = await asyncio.to_thread(client.submit, *args, **kwargs)
+        self._bind_active_gradio_job(event, job)
         timeout_seconds = max(0.1, float(timeout))
         deadline = time.monotonic() + timeout_seconds
 
@@ -746,7 +766,9 @@ class MusicPlugin(Star):
                 logger.debug(f"最终状态检测缓存时出错: {e}")
         
         if detect_cache_hit:
+            self._clear_active_gradio_job(event, job)
             return result, cache_hit_from_api or cache_hit_detected
+        self._clear_active_gradio_job(event, job)
         return result
 
     async def _predict_cover(
@@ -816,6 +838,7 @@ class MusicPlugin(Star):
                 "msst_batch_size": self.msst_batch_size,
                 "msst_num_overlap": self.msst_num_overlap,
                 "msst_normalize": self.msst_normalize,
+                "vocal_postprocess": self.vocal_postprocess,
                 "shift_accompaniment": self.shift_accompaniment,
                 **msst_kwargs,
             }
@@ -873,23 +896,59 @@ class MusicPlugin(Star):
             if now - start_time > self.task_timeout_seconds:
                 expired_keys.append(key)
         for key in expired_keys:
-            self._active_cover_tasks.pop(key, None)
+            task_info = self._active_cover_tasks.pop(key, None) or {}
+            job = task_info.get("gradio_job")
+            task = task_info.get("asyncio_task")
+            try:
+                if job is not None:
+                    job.cancel()
+            except Exception as exc:
+                logger.debug(f"清理超时 Gradio 任务失败: {exc}")
+            if isinstance(task, asyncio.Task) and not task.done():
+                task.cancel()
             logger.warning(f"[MatsukoCover] 任务超时已清理: {key}")
 
-    def _register_active_task(self, event: AstrMessageEvent, song_name: str, api_type: str, model_display: str = ""):
+    def _register_active_task(self, event: AstrMessageEvent, song_name: str, api_type: str, model_display: str = "") -> bool:
         """注册正在进行的翻唱任务"""
         if not self.enable_task_tracking:
-            return
+            return True
         self._cleanup_expired_tasks()
         key = self._get_task_key(event)
+        if key in self._active_cover_tasks:
+            return False
         self._active_cover_tasks[key] = {
             "song_name": song_name,
             "api_type": api_type,
             "model_display": model_display,
             "status": "处理中",
             "start_time": time.time(),
+            "asyncio_task": None,
+            "gradio_job": None,
         }
         logger.info(f"[MatsukoCover] 注册翻唱任务: {key} -> 《{song_name}》({api_type})")
+        return True
+
+    def _bind_active_asyncio_task(self, event: AstrMessageEvent, task: Optional[asyncio.Task] = None) -> None:
+        """把真实 asyncio 任务绑定到会话状态，供取消命令使用。"""
+        if not self.enable_task_tracking:
+            return
+        info = self._active_cover_tasks.get(self._get_task_key(event))
+        if info is not None:
+            info["asyncio_task"] = task or asyncio.current_task()
+
+    def _bind_active_gradio_job(self, event: Optional[AstrMessageEvent], job: Any) -> None:
+        if not self.enable_task_tracking or event is None:
+            return
+        info = self._active_cover_tasks.get(self._get_task_key(event))
+        if info is not None:
+            info["gradio_job"] = job
+
+    def _clear_active_gradio_job(self, event: Optional[AstrMessageEvent], job: Any) -> None:
+        if not self.enable_task_tracking or event is None:
+            return
+        info = self._active_cover_tasks.get(self._get_task_key(event))
+        if info is not None and info.get("gradio_job") is job:
+            info["gradio_job"] = None
 
     def _finish_active_task(self, event: AstrMessageEvent, status: str = "已完成"):
         """标记翻唱任务结束"""
@@ -1026,6 +1085,45 @@ class MusicPlugin(Star):
             display_names.append(f"{index}. {display_name}")
             key_list.append(model_name)
         return "\n".join(display_names), key_list
+
+    @staticmethod
+    def _format_cache_bytes(value: Any) -> str:
+        try:
+            size = float(value)
+        except (TypeError, ValueError):
+            return "未知"
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if size < 1024 or unit == "TiB":
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} TiB"
+
+    async def _backend_cache_request(self, api_type: str, clear: bool = False) -> Any:
+        base_url = self._get_engine_base_url(api_type)
+        async with self._get_gradio_client(base_url) as client:
+            if clear:
+                return await self._async_predict(
+                    client, scope="all", api_name="/clear_cache", timeout=60
+                )
+            return await self._async_predict(
+                client, api_name="/cache_info", timeout=30
+            )
+
+    @staticmethod
+    def _parse_cache_target(message: str) -> list[str]:
+        normalized = str(message or "").strip().lower()
+        for command in ("查看翻唱缓存", "清理翻唱缓存"):
+            normalized = re.sub(rf"^/?{command}\s*", "", normalized).strip()
+        aliases = {
+            "rvc": ["rvc"],
+            "svc": ["svc"],
+            "svcvc": ["svcvc"],
+            "soulx": ["svcvc"],
+            "all": ["rvc", "svc", "svcvc"],
+            "全部": ["rvc", "svc", "svcvc"],
+            "": ["rvc", "svc", "svcvc"],
+        }
+        return aliases.get(normalized, [])
 
     def get_models_detailed_list(self, api_type="rvc"):
         """获取包含完整信息的模型列表（用于LLM匹配）"""
@@ -1559,6 +1657,58 @@ class MusicPlugin(Star):
 
     # ==================== 命令处理（支持LLM强制模式） ====================
 
+    @filter.command("查看翻唱缓存")
+    async def show_cover_cache(self, event: AstrMessageEvent):
+        """查看各中间层当前缓存占用。"""
+        targets = self._parse_cache_target(event.message_str)
+        if not targets:
+            yield event.plain_result("用法：/查看翻唱缓存 [all|rvc|svc|svcvc]")
+            return
+        yield event.plain_result("🔎 正在读取中间层缓存状态，请稍候...")
+        lines = []
+        for api_type in targets:
+            label = self._engine_display_name(api_type)
+            try:
+                info = await self._backend_cache_request(api_type, clear=False)
+                if not isinstance(info, dict):
+                    raise RuntimeError(f"后端返回了无法识别的数据: {info!r}")
+                lines.append(
+                    f"{label}: {int(info.get('total_files', 0))} 个文件 / "
+                    f"{self._format_cache_bytes(info.get('total_bytes', 0))}"
+                )
+                for area, stats in (info.get("areas") or {}).items():
+                    lines.append(
+                        f"  - {area}: {int(stats.get('files', 0))} 个 / "
+                        f"{self._format_cache_bytes(stats.get('bytes', 0))}"
+                    )
+            except Exception as exc:
+                lines.append(f"{label}: 无法读取（{exc}）")
+        yield event.plain_result("📦 翻唱缓存状态：\n" + "\n".join(lines))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("清理翻唱缓存")
+    async def clear_cover_cache(self, event: AstrMessageEvent):
+        """清理选定中间层的结果、分离和下载缓存。"""
+        targets = self._parse_cache_target(event.message_str)
+        if not targets:
+            yield event.plain_result("用法：/清理翻唱缓存 [all|rvc|svc|svcvc]")
+            return
+        yield event.plain_result("🧹 正在安全清理中间层缓存，请稍候...")
+        lines = []
+        for api_type in targets:
+            label = self._engine_display_name(api_type)
+            try:
+                result = await self._backend_cache_request(api_type, clear=True)
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"后端返回了无法识别的数据: {result!r}")
+                lines.append(
+                    f"{label}: 删除 {int(result.get('deleted_files', 0))} 个文件，"
+                    f"释放 {self._format_cache_bytes(result.get('freed_bytes', 0))}"
+                )
+            except Exception as exc:
+                lines.append(f"{label}: 清理失败（{exc}）")
+        yield event.plain_result("✅ 缓存清理完成：\n" + "\n".join(lines))
+
     @filter.command("列出msst模型")
     async def list_msst_models(self, event: AstrMessageEvent):
         """列出当前 RVCSVC-API-MSST 后端安装的分离模型。"""
@@ -1947,7 +2097,10 @@ class MusicPlugin(Star):
             yield event.plain_result("请输入歌名！")
             return
 
-        songs = await self.api.fetch_data(keyword=song_name, limit=10)
+        songs = await asyncio.wait_for(
+            self.api.fetch_data(keyword=song_name, limit=10),
+            timeout=self.music_api_timeout,
+        )
         if not songs:
             yield event.plain_result("没能找到这首歌~")
             return
@@ -2045,7 +2198,10 @@ class MusicPlugin(Star):
         api_key = self.config.get("third_party_api_key", "")
         qq_api = QQMusicAPI(api_key=api_key)
         try:
-            songs = await qq_api.fetch_data(keyword=song_name, limit=10)
+            songs = await asyncio.wait_for(
+                qq_api.fetch_data(keyword=song_name, limit=10),
+                timeout=self.music_api_timeout,
+            )
             if not songs:
                 yield event.plain_result("在QQ音乐没能找到这首歌~")
                 return
@@ -2131,6 +2287,10 @@ class MusicPlugin(Star):
         temp_audio_file = None
         effective_seed = None
         song_name = song.get("name", "翻唱")
+        if not self._register_active_task(event, song_name, api_type, model_name):
+            await event.send(event.plain_result("⏳ 当前会话已有翻唱任务，请等待完成或先取消任务。"))
+            return
+        self._bind_active_asyncio_task(event)
         try:
             # 判断是否为QQ音乐歌曲（通过songmid字段判断）
             is_qq_music = "songmid" in song and song.get("songmid")
@@ -2198,30 +2358,20 @@ class MusicPlugin(Star):
                         await event.send(event.plain_result(error_msg))
                         return
                     
-                    # 下载到本地临时文件（使用英文文件名）
-                    temp_dir = os.path.join(os.path.dirname(__file__), "temp_audio")
-                    os.makedirs(temp_dir, exist_ok=True)
-                    temp_audio_file = os.path.join(temp_dir, f"qq_{uuid.uuid4().hex[:8]}_{hash(songmid) % 10000}.mp3")
-                    
                     await self._send_progress_notice(
                         event,
                         f"📥 正在下载 QQ 音乐《{song_name}》，下载完成后会自动提交 SoulX...",
                     )
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(audio_url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                            if resp.status == 200:
-                                with open(temp_audio_file, 'wb') as f:
-                                    async for chunk in resp.content.iter_chunked(8192):
-                                        f.write(chunk)
-                                await self._send_progress_notice(
-                                    event,
-                                    f"✅ QQ 音乐下载完成（{os.path.getsize(temp_audio_file) / 1024 / 1024:.1f} MiB），正在提交中间层...",
-                                )
-                            else:
-                                error_msg = f"❌ QQ音乐下载失败 (HTTP {resp.status})。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API限制 3) 网络问题。建议换一首歌或稍后再试。"
-                                logger.error(error_msg)
-                                await event.send(event.plain_result(error_msg))
-                                return
+                    temp_audio_file = await self._download_audio(audio_url, ".mp3")
+                    if not temp_audio_file:
+                        error_msg = "❌ QQ音乐下载失败或文件超过大小限制，请换一首歌或稍后再试。"
+                        logger.error(error_msg)
+                        await event.send(event.plain_result(error_msg))
+                        return
+                    await self._send_progress_notice(
+                        event,
+                        f"✅ QQ 音乐下载完成（{os.path.getsize(temp_audio_file) / 1024 / 1024:.1f} MiB），正在提交中间层...",
+                    )
                     
                     # 使用本地文件路径
                     song_input = temp_audio_file
@@ -2257,6 +2407,7 @@ class MusicPlugin(Star):
             else:
                 await event.send(event.plain_result(f"生成时发生严重错误: {e}"))
         finally:
+            self._finish_active_task(event)
             if self.enable_send_file:
                 await asyncio.sleep(3)
             if result_path and os.path.isfile(result_path):
@@ -2330,7 +2481,10 @@ class MusicPlugin(Star):
         if song_display_name.startswith("qq_") or song_display_name.startswith("dl_"):
             song_display_name = "本地音频"
         
-        self._register_active_task(event, song_display_name, api_type, model_display)
+        if not self._register_active_task(event, song_display_name, api_type, model_display):
+            await event.send(event.plain_result("⏳ 当前会话已有翻唱任务，请等待完成或先取消任务。"))
+            return
+        self._bind_active_asyncio_task(event)
         
         result_path = None
         effective_seed = None
@@ -2428,7 +2582,10 @@ class MusicPlugin(Star):
                 if self.disable_netease:
                     return "❌ 网易云音乐功能已被禁用！请使用 platform='qq' 或 platform='qqmusic' 搜索QQ音乐。"
             
-            songs = await api_to_use.fetch_data(keyword=keyword, limit=limit)
+            songs = await asyncio.wait_for(
+                api_to_use.fetch_data(keyword=keyword, limit=limit),
+                timeout=self.music_api_timeout,
+            )
             
             if not songs:
                 if platform_name == "QQ音乐":
@@ -2514,14 +2671,16 @@ class MusicPlugin(Star):
         
         search_query = f"{song_name} {artist_name}" if artist_name else song_name
 
-        self._register_active_task(event, song_name, "rvc", model_display)
+        if not self._register_active_task(event, song_name, "rvc", model_display):
+            return "⏳ 当前已有翻唱任务，请等待完成或先调用 cancel_cover_task。"
         logger.info(
             f"[MatsukoCover任务Debug] 接受 rvc_cover 请求 | song={song_name} | "
             f"model={model_display} | source={actual_music_source}"
         )
-        self._create_tracked_task(self._smart_cover_async(
+        task = self._create_tracked_task(self._smart_cover_async(
             event, search_query, "rvc", model_index, key_shift, model_display, actual_music_source
         ))
+        self._bind_active_asyncio_task(event, task)
         return f"🎵 正在从【{source_display}】用RVC模型【{model_display}】翻唱《{song_name}》... 请稍等，音频生成后会自动发送！"
 
     @filter.llm_tool(name="svc_cover")
@@ -2567,14 +2726,16 @@ class MusicPlugin(Star):
         
         search_query = f"{song_name} {artist_name}" if artist_name else song_name
 
-        self._register_active_task(event, song_name, "svc", model_display)
+        if not self._register_active_task(event, song_name, "svc", model_display):
+            return "⏳ 当前已有翻唱任务，请等待完成或先调用 cancel_cover_task。"
         logger.info(
             f"[MatsukoCover任务Debug] 接受 svc_cover 请求 | song={song_name} | "
             f"model={model_display} | source={actual_music_source}"
         )
-        self._create_tracked_task(self._smart_cover_async(
+        task = self._create_tracked_task(self._smart_cover_async(
             event, search_query, "svc", model_index, key_shift, model_display, actual_music_source
         ))
+        self._bind_active_asyncio_task(event, task)
         return f"🎵 正在从【{source_display}】用SVC模型【{model_display}】翻唱《{song_name}》... 请稍等，音频生成后会自动发送！"
 
     @filter.llm_tool(name="svcvc_cover")
@@ -2627,12 +2788,13 @@ class MusicPlugin(Star):
         source_display = "QQ音乐" if actual_music_source == "qqmusic" else "网易云"
         search_query = f"{song_name} {artist_name}" if artist_name else song_name
 
-        self._register_active_task(event, song_name, "svcvc", model_display)
+        if not self._register_active_task(event, song_name, "svcvc", model_display):
+            return "⏳ 当前已有翻唱任务，请等待完成或先调用 cancel_cover_task。"
         logger.info(
             f"[MatsukoCover任务Debug] 接受 svcvc_cover 请求 | song={song_name} | "
             f"profile={model_display} | source={actual_music_source}"
         )
-        self._create_tracked_task(self._smart_cover_async(
+        task = self._create_tracked_task(self._smart_cover_async(
             event,
             search_query,
             "svcvc",
@@ -2641,6 +2803,7 @@ class MusicPlugin(Star):
             model_display,
             actual_music_source,
         ))
+        self._bind_active_asyncio_task(event, task)
         seed_mode = "随机种子" if self.svcvc_random_seed else f"固定种子 {self.svcvc_seed}"
         return (
             f"🎵 正在从【{source_display}】用 SoulX-SVCVC 参考音色"
@@ -2653,6 +2816,7 @@ class MusicPlugin(Star):
         flow_id = uuid.uuid4().hex[:8]
         result_path = None
         temp_audio_file = None
+        temporary_search_api = None
         try:
             logger.info(
                 f"[CoverFlow:{flow_id}] stage=start | song={song_name} | "
@@ -2693,6 +2857,7 @@ class MusicPlugin(Star):
                 from .api import QQMusicAPI
                 api_key = self.config.get("third_party_api_key", "")
                 search_api = QQMusicAPI(api_key=api_key)
+                temporary_search_api = search_api
             elif actual_music_source in ["netease", "netease_nodejs"]:
                 if self.disable_netease:
                     return "❌ 网易云音乐功能已禁用"
@@ -2763,6 +2928,7 @@ class MusicPlugin(Star):
             # 关闭临时创建的 QQMusicAPI 搜索实例
             if actual_music_source == "qqmusic" and hasattr(search_api, 'close'):
                 await search_api.close()
+                temporary_search_api = None
             
             if not songs:
                 if actual_music_source == "qqmusic":
@@ -2901,31 +3067,19 @@ class MusicPlugin(Star):
                         logger.error(error_msg)
                         return error_msg
                     
-                    import aiohttp
-                    temp_dir = os.path.join(os.path.dirname(__file__), "temp_audio")
-                    os.makedirs(temp_dir, exist_ok=True)
-                    temp_audio_file = os.path.join(temp_dir, f"qq_{hash(songmid) % 10000000}.mp3")
-                    
-                    logger.info(f"QQ音乐: 下载音频到 {temp_audio_file}")
+                    logger.info("QQ音乐: 开始流式下载音频")
                     await self._send_progress_notice(
                         event,
                         f"📥 正在下载 QQ 音乐《{song_display_name}》，下载完成后会自动提交 SoulX...",
                     )
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(audio_url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                            if resp.status == 200:
-                                with open(temp_audio_file, "wb") as f:
-                                    async for chunk in resp.content.iter_chunked(8192):
-                                        f.write(chunk)
-                                logger.info(f"QQ音乐: 下载完成，文件大小: {os.path.getsize(temp_audio_file)} bytes")
-                                await self._send_progress_notice(
-                                    event,
-                                    f"✅ QQ 音乐下载完成（{os.path.getsize(temp_audio_file) / 1024 / 1024:.1f} MiB），正在提交中间层...",
-                                )
-                            else:
-                                error_msg = f"❌ QQ音乐下载失败: HTTP {resp.status}。可能原因：1) 该歌曲是VIP专享 2) QQ音乐API限制 3) 网络问题。建议换一首歌或稍后再试。"
-                                logger.error(error_msg)
-                                return error_msg
+                    temp_audio_file = await self._download_audio(audio_url, ".mp3")
+                    if not temp_audio_file:
+                        return "❌ QQ音乐下载失败或文件超过大小限制，请换一首歌或稍后再试。"
+                    logger.info(f"QQ音乐: 下载完成，文件大小: {os.path.getsize(temp_audio_file)} bytes")
+                    await self._send_progress_notice(
+                        event,
+                        f"✅ QQ 音乐下载完成（{os.path.getsize(temp_audio_file) / 1024 / 1024:.1f} MiB），正在提交中间层...",
+                    )
                     
                     song_input_for_api = temp_audio_file
                     
@@ -3015,6 +3169,11 @@ class MusicPlugin(Star):
             else:
                 return f"{api_type.upper()} 翻唱时发生错误: {e}"
         finally:
+            if temporary_search_api is not None:
+                try:
+                    await temporary_search_api.close()
+                except Exception as close_error:
+                    logger.debug(f"关闭临时 QQ 音乐客户端失败: {close_error}")
             try:
                 if self.enable_send_file and result_path and os.path.isfile(result_path):
                     await asyncio.sleep(3)
@@ -3261,12 +3420,14 @@ class MusicPlugin(Star):
             search_query = f"{song_name} {artist_name}" if artist_name else song_name
             
             # 注册活跃任务
-            self._register_active_task(event, song_name, actual_api_type, actual_model_display)
+            if not self._register_active_task(event, song_name, actual_api_type, actual_model_display):
+                return "⏳ 当前已有翻唱任务，请等待完成或先调用 cancel_cover_task。"
             
-            self._create_tracked_task(self._smart_cover_async(
+            task = self._create_tracked_task(self._smart_cover_async(
                 event, search_query, actual_api_type, actual_model_index, 
                 actual_key_shift, actual_model_display, actual_music_source
             ))
+            self._bind_active_asyncio_task(event, task)
             
             return f"🎵 正在从【{source_display}】用【{actual_model_display}】翻唱《{song_name}》... 请稍等，音频生成后会自动发送！{artist_pref_hint}"
             
@@ -3485,10 +3646,11 @@ class MusicPlugin(Star):
             batch_song_names = "、".join(songs[:3])
             if len(songs) > 3:
                 batch_song_names += f" 等{len(songs)}首"
-            self._register_active_task(event, f"[批量]{batch_song_names}", actual_api_type)
+            if not self._register_active_task(event, f"[批量]{batch_song_names}", actual_api_type):
+                return "⏳ 当前已有翻唱任务，请等待完成或先调用 cancel_cover_task。"
             
             # === 创建后台任务（异步执行）===
-            self._create_tracked_task(
+            task = self._create_tracked_task(
                 self._execute_batch_cover_async(
                     event=event,
                     songs=songs,
@@ -3498,6 +3660,7 @@ class MusicPlugin(Star):
                     music_source=actual_music_source
                 )
             )
+            self._bind_active_asyncio_task(event, task)
             
             # === 立即返回确认消息（不会被超时取消）===
             report_shift = self._effective_key_shift(actual_api_type, actual_key_shift)
@@ -4220,8 +4383,21 @@ class MusicPlugin(Star):
             return "✅ 当前没有正在进行的翻唱任务，无需取消nya～"
         
         task_info = self._active_cover_tasks.pop(key, None)
+        gradio_job = task_info.get("gradio_job")
+        asyncio_task = task_info.get("asyncio_task")
+        if gradio_job is not None:
+            try:
+                await asyncio.to_thread(gradio_job.cancel)
+            except Exception as exc:
+                logger.warning(f"取消 Gradio 后端任务失败: {exc}")
+        if (
+            isinstance(asyncio_task, asyncio.Task)
+            and asyncio_task is not asyncio.current_task()
+            and not asyncio_task.done()
+        ):
+            asyncio_task.cancel()
         return (
-            f"🛑 已取消翻唱任务nya～\n"
+            f"🛑 已向插件和后端发送取消请求nya～\n"
             f"歌曲：《{task_info['song_name']}》\n"
             f"已进行：{int(time.time() - task_info['start_time'])}秒\n"
             f"您可以重新发起翻唱请求喵！🐾"

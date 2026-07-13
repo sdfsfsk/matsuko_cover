@@ -429,6 +429,12 @@
     "hint": "开启后，设置升降调时伴奏会同步调整以匹配人声。关闭则只调整人声音高，伴奏保持原调。适合想单独听人声变化效果时使用。默认开启。",
     "default": true
   },
+  "vocal_postprocess": {
+    "description": "启用旧版人声后处理（EQ/压缩/混响）",
+    "type": "bool",
+    "hint": "默认关闭以保留 RVC/SVC 原始音质。开启后才应用 80Hz 高通、16kHz 低通、EQ、压缩、延迟和混响；混响与延迟强度仍由原配置控制。仅对更新后的 RVCSVC-API-amd/MSST 生效。",
+    "default": false
+  },
   "enable_inject_context": {
     "description": "将翻唱任务状态注入LLM上下文记忆",
     "type": "bool",
