@@ -2,7 +2,7 @@
 
 适用于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的 AI 翻唱插件，支持 **RVC、SVC-Fusion、SoulX-SVCVC** 三种语音转换后端，以及网易云音乐、QQ 音乐、本地音频和 LLM 工具调用。
 
-> 当前版本：**v2.8.0**
+> 当前版本：**v2.10.3**
 >
 > 许可证：**GNU AGPL-3.0**
 >
@@ -156,7 +156,7 @@ SoulX 在 AMD 上处理长歌曲时建议把 `inference_timeout` 和任务超时
 | 配置 | 默认值 | 说明 |
 |---|---:|---|
 | `svcvc_prompt_vocal_sep` | `false` | 是否分离参考音频 |
-| `svcvc_target_vocal_sep` | `true` | 是否分离目标歌曲 |
+| `svcvc_target_separation` | `soulx` | 目标分离方式：`soulx` / `msst` / `none` |
 | `svcvc_auto_shift` | `true` | 自动匹配音域 |
 | `svcvc_auto_mix_acc` | `true` | 自动混回伴奏 |
 | `svcvc_pitch_shift` | `0` | 指定变调，范围 -36～36 |
@@ -178,6 +178,8 @@ SoulX 在 AMD 上处理长歌曲时建议把 `inference_timeout` 和任务超时
 | `/刷新svcvc音色` | 刷新 SoulX 参考音色 |
 | `/列出msst模型` | 查看 MSST 分离模型 |
 | `/切换msst模型 <序号或名称>` | 切换 MSST 分离模型 |
+| `/列出svcvc分离模型` | 查看 SVCVC-API-SVF 内置的 MSST 分离模型及当前选择 |
+| `/切换svcvc分离模型 <序号或名称>` | 切换并持久化 SVCVC-API-SVF 的 MSST 分离模型（管理员） |
 | `/设置rvc后端链接 <URL>` | 修改 RVC 中间层地址（管理员） |
 | `/设置svc后端链接 <URL>` | 修改 SVC 中间层地址（管理员） |
 | `/设置svcvc后端链接 <URL>` | 修改 SVCVC 中间层地址（管理员） |
@@ -259,6 +261,27 @@ SoulX 在 AMD 上处理长歌曲时建议把 `inference_timeout` 和任务超时
 检查 `svcvc_random_seed` 是否关闭。歌曲内容、参考音色、种子、采样步数、CFG、升降调或模型资产变化都会生成新的缓存键。
 
 ## 更新日志
+
+### v2.10.3
+
+- 修复 LLBot `upload_group_file` 已上传二进制、但群文件动态发布返回 `code=-1002` 时被误判为完全失败的问题。
+- 上传异常后会查询群文件列表核对文件名、大小和时间；确认文件已存在时停止重复上传，并尝试获取群文件直链作为兜底提示。
+
+### v2.10.2
+
+- 针对 LLBot 的 `upload_group_file` 临时性 `code=-1002 / 请重试`：语音发送后延迟上传，并按退避间隔重试三次。
+- 最后一次重试自动使用纯 ASCII 文件名，排除协议端文件名编码兼容问题；日志会记录每次回执，全部失败时在 QQ 明确提示。
+
+### v2.10.1
+
+- SVCVC-API-SVF 的 MSST 子进程百分比可经 Gradio 进度事件实时输出到 QQ，并继续受 `progress_update_interval` 节流控制。
+- QQ 群聊启用“同时发送文件”时优先调用 OneBot `upload_group_file`，避免普通 `File` 消息被协议端静默忽略；失败时仍回退原文件消息。
+
+### v2.10.0
+
+- 新增 `/列出svcvc分离模型` 与管理员 `/切换svcvc分离模型`，直接管理 SVCVC-API-SVF 内置 MSST 模型。
+- 模型切换由中间层写回 `config.json`，重启后继续生效，分离缓存按模型指纹自动隔离。
+- SVCVC 的 MSST 自动混伴奏任务会在分离前检查 SoulX 外部伴奏接口，旧 7861 未加载补丁时立即提示，避免完成分离后才失败。
 
 ### v2.8.0
 

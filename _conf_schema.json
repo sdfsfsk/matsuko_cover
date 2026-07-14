@@ -115,11 +115,13 @@
     "hint": "对应 SoulX UI 的 Prompt 人声分离。参考音色若已经是干净人声应关闭；带伴奏的参考音频才开启。",
     "default": false
   },
-  "svcvc_target_vocal_sep": {
-    "description": "SoulX 目标歌曲人声分离",
-    "type": "bool",
-    "hint": "对应 SoulX UI 的 Target 人声分离。点歌得到的是完整歌曲时应开启；传入纯人声时可关闭。",
-    "default": true
+  "svcvc_target_separation": {
+    "description": "SVCVC 目标歌曲人声分离方式",
+    "type": "string",
+    "hint": "SoulX 使用其自带分离；MSST 使用隔壁 RVCSVC-API-MSST 的 BS-Roformer 原生 AMD ROCm 分离；纯人声输入可选择不分离。",
+    "default": "soulx",
+    "options": ["soulx", "msst", "none"],
+    "labels": ["SoulX 目标歌曲人声分离", "MSST 人声分离（BS-Roformer）", "不分离（输入已是纯人声）"]
   },
   "svcvc_auto_shift": {
     "description": "SoulX 自动变调",

@@ -33,7 +33,7 @@ MODEL_ALIAS_SEPARATOR = "|||"
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
     "RVC/SVC/SoulX-SVCVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈、QQ音乐风控自动重试）",
-    "2.8.0",
+    "2.10.3",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
@@ -120,7 +120,27 @@ class MusicPlugin(Star):
 
         # === SoulX-Singer SVC Voice Conversion 参数 ===
         self.svcvc_prompt_vocal_sep = bool(config.get("svcvc_prompt_vocal_sep", False))
-        self.svcvc_target_vocal_sep = bool(config.get("svcvc_target_vocal_sep", True))
+        legacy_target_vocal_sep = bool(config.get("svcvc_target_vocal_sep", True))
+        raw_target_separation = str(config.get("svcvc_target_separation", "") or "").strip().lower()
+        target_separation_aliases = {
+            "soulx": "soulx",
+            "msst": "msst",
+            "none": "none",
+            "off": "none",
+            "关闭": "none",
+            "不分离": "none",
+        }
+        if not raw_target_separation:
+            self.svcvc_target_separation = "soulx" if legacy_target_vocal_sep else "none"
+        else:
+            self.svcvc_target_separation = target_separation_aliases.get(raw_target_separation, "soulx")
+            if raw_target_separation not in target_separation_aliases:
+                logger.warning(
+                    "svcvc_target_separation 配置无效: %s，回退到 soulx",
+                    raw_target_separation,
+                )
+        # 保留旧字段供旧中间层参数兼容；新中间层以字符串分离方式为准。
+        self.svcvc_target_vocal_sep = self.svcvc_target_separation == "soulx"
         self.svcvc_auto_shift = bool(config.get("svcvc_auto_shift", True))
         self.svcvc_auto_mix_acc = bool(config.get("svcvc_auto_mix_acc", True))
         try:
@@ -219,6 +239,92 @@ class MusicPlugin(Star):
         if raw_doc and "{available_engines}" in raw_doc:
             type(self).smart_cover.__doc__ = raw_doc.replace("{available_engines}", engines_str)
 
+    @staticmethod
+    def _onebot_response_data(response: Any) -> Dict[str, Any]:
+        """Extract the data object returned by aiocqhttp/OneBot actions."""
+        if not isinstance(response, dict):
+            return {}
+        data = response.get("data")
+        return data if isinstance(data, dict) else response
+
+    async def _find_recent_group_file(
+        self,
+        call_action,
+        group_id: int,
+        file_name: str,
+        file_size: int,
+    ) -> tuple[Optional[Dict[str, Any]], str]:
+        """Recover an upload that succeeded before LLBot's file-card feed failed.
+
+        LLBot uploads the binary first and then publishes a group-file feed.  QQ
+        may return -1002 for the second step even though the file is already in
+        the group file system.  Verify the root file list before retrying the
+        whole upload so we do not create duplicates.
+        """
+        expected_name = str(file_name or "").strip()
+        expected_size = max(0, int(file_size or 0))
+        now = int(time.time())
+
+        for check in range(3):
+            if check:
+                await asyncio.sleep(check)
+            try:
+                response = await call_action(
+                    "get_group_root_files",
+                    group_id=int(group_id),
+                )
+                data = self._onebot_response_data(response)
+                files = data.get("files", [])
+                if not isinstance(files, list):
+                    files = []
+
+                candidates = []
+                for item in files:
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("file_name", "")).strip() != expected_name:
+                        continue
+                    try:
+                        listed_size = int(item.get("file_size", 0) or 0)
+                        upload_time = int(item.get("upload_time", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if expected_size and listed_size != expected_size:
+                        continue
+                    # Only accept a fresh item from this upload attempt.  This
+                    # avoids mistaking an old cached song with the same name.
+                    if upload_time and abs(now - upload_time) > 15 * 60:
+                        continue
+                    candidates.append(item)
+
+                if not candidates:
+                    continue
+                uploaded = max(
+                    candidates,
+                    key=lambda item: int(item.get("upload_time", 0) or 0),
+                )
+                download_url = ""
+                file_id = uploaded.get("file_id")
+                if file_id:
+                    try:
+                        url_response = await call_action(
+                            "get_group_file_url",
+                            group_id=int(group_id),
+                            file_id=file_id,
+                            busid=int(uploaded.get("busid", 0) or 0),
+                        )
+                        url_data = self._onebot_response_data(url_response)
+                        download_url = str(url_data.get("url", "") or "").strip()
+                    except Exception as url_error:
+                        logger.debug(f"读取已上传群文件下载链接失败: {url_error}")
+                return uploaded, download_url
+            except Exception as verify_error:
+                logger.debug(
+                    f"核验QQ群文件上传结果失败: check={check + 1}/3 "
+                    f"error={verify_error}"
+                )
+        return None, ""
+
     async def _send_cover_result(self, event: AstrMessageEvent, result_path: str, song_name: str = "翻唱", cache_hit: bool = False):
         if not result_path or not os.path.exists(result_path):
             await event.send(event.plain_result("生成失败，后端未返回有效文件路径。"))
@@ -237,18 +343,86 @@ class MusicPlugin(Star):
             logger.error(f"QQ语音发送失败，将继续尝试发送文件: {e}")
         # 配置开启时额外发送文件；即使未开启，QQ 语音失败也必须自动兜底。
         if self.enable_send_file or not record_sent:
-            try:
-                file_name = os.path.basename(result_path)
-                name, ext = os.path.splitext(file_name)
-                if not ext:
-                    ext = ".mp3"
-                safe_name = re.sub(r'[\\/:*?"<>|]', '', song_name)
-                send_name = f"{safe_name}{ext}"
-                await event.send(event.chain_result([File(name=send_name, file=result_path)]))
-                file_sent = True
-                logger.info(f"[MatsukoCover发送Debug] QQ文件发送成功: {send_name}")
-            except Exception as e:
-                logger.error(f"以文件形式发送翻唱结果失败: {e}")
+            file_name = os.path.basename(result_path)
+            _, ext = os.path.splitext(file_name)
+            if not ext:
+                ext = ".mp3"
+            safe_name = re.sub(r'[\\/:*?"<>|]', '', song_name).strip() or "翻唱"
+            send_name = f"{safe_name}{ext}"
+            file_path = os.path.abspath(result_path)
+
+            # OneBot 群聊中的普通 File 消息可能被协议端静默忽略。优先走
+            # upload_group_file，确保真正上传到群文件；其他平台/私聊再回退 File。
+            group_id = event.get_group_id()
+            call_action = getattr(getattr(event, "bot", None), "call_action", None)
+            if group_id and callable(call_action):
+                # LLBot may still be finalizing the preceding voice message. An
+                # immediate file upload commonly returns code=-1002 / 请重试.
+                if record_sent:
+                    await asyncio.sleep(2)
+                ascii_name = f"matsuko_cover_{int(time.time())}{ext.lower()}"
+                upload_names = (send_name, send_name, ascii_name)
+                upload_error = None
+                for attempt, upload_name in enumerate(upload_names, start=1):
+                    if attempt > 1:
+                        await asyncio.sleep(2 * (attempt - 1))
+                    try:
+                        response = await call_action(
+                            "upload_group_file",
+                            group_id=int(group_id),
+                            file=file_path,
+                            name=upload_name,
+                        )
+                        file_sent = True
+                        logger.info(
+                            "[MatsukoCover发送Debug] "
+                            f"QQ群文件上传成功: name={upload_name} attempt={attempt} "
+                            f"response={response!r}"
+                        )
+                        break
+                    except Exception as e:
+                        upload_error = e
+                        logger.warning(
+                            "[MatsukoCover发送Debug] "
+                            f"QQ群文件上传失败: name={upload_name} "
+                            f"attempt={attempt}/{len(upload_names)} error={e}"
+                        )
+                        uploaded, download_url = await self._find_recent_group_file(
+                            call_action,
+                            int(group_id),
+                            upload_name,
+                            os.path.getsize(file_path),
+                        )
+                        if uploaded:
+                            file_sent = True
+                            logger.info(
+                                "[MatsukoCover发送Debug] "
+                                "QQ群文件主体已上传，只有聊天文件卡片发布失败: "
+                                f"name={upload_name} file_id={uploaded.get('file_id')}"
+                            )
+                            notice = (
+                                f"✅ 音频已保存到群文件：{upload_name}\n"
+                                "⚠️ QQ 拒绝了群聊文件卡片，已自动核验实际上传结果。"
+                            )
+                            if download_url:
+                                notice += f"\n🔗 下载链接：{download_url}"
+                            await event.send(event.plain_result(notice))
+                            break
+                if not file_sent:
+                    logger.warning(f"QQ群文件重试全部失败，将回退普通文件消息: {upload_error}")
+
+            if not file_sent:
+                try:
+                    await event.send(event.chain_result([File(name=send_name, file=file_path)]))
+                    file_sent = True
+                    logger.info(f"[MatsukoCover发送Debug] QQ文件消息发送成功: {send_name}")
+                except Exception as e:
+                    logger.error(f"以文件形式发送翻唱结果失败: {e}")
+        if record_sent and self.enable_send_file and not file_sent:
+            await event.send(event.plain_result(
+                "⚠️ 语音已发送，但 LLBot 群文件上传失败；"
+                "已完成多次重试，请查看 LLBot 日志中的 upload_group_file 错误。"
+            ))
         if not record_sent and not file_sent:
             raise RuntimeError(f"QQ语音和文件均发送失败: {record_error or '未知错误'}")
         if not record_sent and file_sent:
@@ -795,7 +969,8 @@ class MusicPlugin(Star):
                 logger.info(
                     "[SoulX-SVCVC参数Debug] "
                     f"profile={model_name} | prompt_sep={self.svcvc_prompt_vocal_sep} | "
-                    f"target_sep={self.svcvc_target_vocal_sep} | auto_shift={self.svcvc_auto_shift} | "
+                    f"target_separation={self.svcvc_target_separation} | "
+                    f"auto_shift={self.svcvc_auto_shift} | "
                     f"auto_mix={self.svcvc_auto_mix_acc} | pitch_shift={pitch_shift} | "
                     f"n_step={self.svcvc_n_step} | cfg={self.svcvc_cfg} | "
                     f"seed={effective_seed} | random={self.svcvc_random_seed}"
@@ -806,6 +981,7 @@ class MusicPlugin(Star):
                     model_dropdown=model_name,
                     prompt_vocal_sep=self.svcvc_prompt_vocal_sep,
                     target_vocal_sep=self.svcvc_target_vocal_sep,
+                    target_separation=self.svcvc_target_separation,
                     auto_shift=self.svcvc_auto_shift,
                     auto_mix_acc=self.svcvc_auto_mix_acc,
                     pitch_shift=pitch_shift,
@@ -1655,6 +1831,63 @@ class MusicPlugin(Star):
                 logger.debug(f"同步 MSST 模型到后端 {base_url} 失败，已忽略: {exc}")
         return None
 
+    async def _get_svcvc_msst_models_from_api(self) -> List[Dict[str, Any]]:
+        """读取 SVCVC-API-SVF 内置 MSST 模型及当前选择。"""
+        async with self._get_gradio_client(self.svcvc_base_url) as client:
+            supports = self._client_supports_api(client, "/show_msst_models")
+            if supports is False:
+                raise RuntimeError("SVCVC-API-SVF 版本过旧，未提供 MSST 模型列表接口")
+            result = await self._async_predict(
+                client,
+                api_name="/show_msst_models",
+                timeout=30,
+            )
+        if not isinstance(result, list):
+            raise ValueError(f"SVCVC 后端返回格式错误: {result!r}")
+
+        models: List[Dict[str, Any]] = []
+        for item in result:
+            if isinstance(item, dict) and item.get("id"):
+                models.append(
+                    {
+                        "id": str(item["id"]),
+                        "name": str(item.get("name") or item["id"]),
+                        "current": bool(item.get("current")),
+                    }
+                )
+            elif isinstance(item, str):
+                models.append({"id": item, "name": item, "current": False})
+        if not models:
+            raise ValueError("SVCVC 后端没有发现已安装的 MSST 模型")
+        logger.info(
+            "[SVCVC MSST模型列表Debug] 插件从 %s 获取 %d 个模型: %s",
+            self.svcvc_base_url,
+            len(models),
+            ", ".join(item["id"] for item in models),
+        )
+        return models
+
+    async def _select_svcvc_msst_model(self, model_id: str) -> Dict[str, Any]:
+        """切换 SVCVC-API-SVF 内置 MSST 模型并确认后端已持久化。"""
+        async with self._get_gradio_client(self.svcvc_base_url) as client:
+            supports = self._client_supports_api(client, "/select_msst_model")
+            if supports is False:
+                raise RuntimeError("SVCVC-API-SVF 版本过旧，未提供 MSST 模型切换接口")
+            result = await self._async_predict(
+                client,
+                model_name=model_id,
+                api_name="/select_msst_model",
+                timeout=30,
+            )
+        if not isinstance(result, dict) or not result.get("success"):
+            raise RuntimeError(f"SVCVC 后端未确认模型切换: {result!r}")
+        logger.info(
+            "[SVCVC MSST模型切换Debug] 中间层 %s 已切换并保存为 %s",
+            self.svcvc_base_url,
+            result.get("id") or model_id,
+        )
+        return result
+
     # ==================== 命令处理（支持LLM强制模式） ====================
 
     @filter.command("查看翻唱缓存")
@@ -1794,6 +2027,99 @@ class MusicPlugin(Star):
             f"模型 ID：{selected['id']}\n"
             "之后的新翻唱任务会使用该模型；已有缓存会按模型分别保存。"
             + sync_text
+        )
+
+    @filter.command("列出svcvc分离模型")
+    async def list_svcvc_msst_models(self, event: AstrMessageEvent):
+        """列出 SVCVC-API-SVF 内置的 MSST 人声分离模型。"""
+        yield event.plain_result("🔄 正在读取 SVCVC 分离模型列表，请稍候...")
+        try:
+            models = await self._get_svcvc_msst_models_from_api()
+        except Exception as exc:
+            logger.error(f"获取 SVCVC 分离模型列表失败: {exc}")
+            yield event.plain_result(f"❌ 无法读取 SVCVC 分离模型列表：{exc}")
+            return
+
+        lines = [
+            f"{index}. {item['name']}\n   {item['id']}"
+            + ("  ← 当前使用" if item.get("current") else "")
+            for index, item in enumerate(models, 1)
+        ]
+        yield event.plain_result(
+            "SVCVC-API-SVF 可用的 MSST 人声分离模型：\n"
+            + "\n".join(lines)
+            + "\n\n管理员可使用：/切换svcvc分离模型 <序号或模型名>"
+        )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("切换svcvc分离模型")
+    async def switch_svcvc_msst_model(self, event: AstrMessageEvent):
+        """切换并持久化 SVCVC-API-SVF 的 MSST 人声分离模型。"""
+        raw = event.message_str.strip()
+        requested = re.sub(
+            r"^/?切换svcvc分离模型\s*",
+            "",
+            raw,
+            flags=re.IGNORECASE,
+        ).strip()
+        yield event.plain_result("🔄 正在读取 SVCVC 分离模型列表，请稍候...")
+        try:
+            models = await self._get_svcvc_msst_models_from_api()
+        except Exception as exc:
+            logger.error(f"获取 SVCVC 分离模型列表失败: {exc}")
+            yield event.plain_result(f"❌ 无法读取 SVCVC 分离模型列表：{exc}")
+            return
+
+        lines = [
+            f"{index}. {item['name']}\n   {item['id']}"
+            + ("  ← 当前使用" if item.get("current") else "")
+            for index, item in enumerate(models, 1)
+        ]
+        if not requested:
+            yield event.plain_result(
+                "可用的 SVCVC 分离模型：\n"
+                + "\n".join(lines)
+                + "\n\n用法：/切换svcvc分离模型 <序号或模型名>"
+            )
+            return
+
+        selected = None
+        if requested.isdigit():
+            model_index = int(requested) - 1
+            if 0 <= model_index < len(models):
+                selected = models[model_index]
+        else:
+            lowered = requested.lower()
+            exact = [
+                item
+                for item in models
+                if lowered in (item["id"].lower(), item["name"].lower())
+            ]
+            partial = [
+                item
+                for item in models
+                if lowered in item["id"].lower() or lowered in item["name"].lower()
+            ]
+            candidates = exact or partial
+            if len(candidates) == 1:
+                selected = candidates[0]
+        if selected is None:
+            yield event.plain_result(
+                f"❌ 没有唯一匹配的 SVCVC 分离模型：{requested}\n\n"
+                + "\n".join(lines)
+            )
+            return
+
+        try:
+            result = await self._select_svcvc_msst_model(selected["id"])
+        except Exception as exc:
+            logger.error(f"切换 SVCVC 分离模型失败: {exc}")
+            yield event.plain_result(f"❌ SVCVC 分离模型切换失败：{exc}")
+            return
+        yield event.plain_result(
+            f"✅ SVCVC 分离模型已切换为：{result.get('name') or selected['name']}\n"
+            f"模型 ID：{result.get('id') or selected['id']}\n"
+            "中间层已写入 config.json；之后的新任务会使用该模型，分离缓存按模型隔离。"
         )
     
     @filter.command("刷新rvc模型")

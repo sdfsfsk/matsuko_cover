@@ -1,6 +1,6 @@
 name: astrbot_plugin_matsuko_cover
 display_name: AI点歌
 desc: 🐱 AI翻唱插件（支持 RVC、SVC-Fusion、SoulX-SVCVC 参考音色、随机种子、QQ音乐、本地音频与 LLM 点歌）
-version: v2.8.2
+version: v2.10.3
 author: Matsuko
 repo: "https://github.com/sdfsfsk/matsuko_cover"
