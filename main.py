@@ -139,7 +139,7 @@ class MusicPlugin(Star):
             logger.warning("svcvc_cfg 配置格式错误，使用默认值 1.0")
             self.svcvc_cfg = 1.0
         try:
-            self.svcvc_seed = max(0, min(10000, int(config.get("svcvc_seed", 42))))
+            self.svcvc_seed = max(0, min(4294967295, int(config.get("svcvc_seed", 42))))
         except (TypeError, ValueError):
             logger.warning("svcvc_seed 配置格式错误，使用默认值 42")
             self.svcvc_seed = 42
@@ -787,7 +787,7 @@ class MusicPlugin(Star):
         async with self._get_gradio_client(base_url) as client:
             if api_type == "svcvc":
                 effective_seed = (
-                    secrets.randbelow(10001)
+                    secrets.randbelow(4294967296)
                     if self.svcvc_random_seed
                     else self.svcvc_seed
                 )

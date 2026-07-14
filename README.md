@@ -162,7 +162,7 @@ SoulX 在 AMD 上处理长歌曲时建议把 `inference_timeout` 和任务超时
 | `svcvc_pitch_shift` | `0` | 指定变调，范围 -36～36 |
 | `svcvc_n_step` | `32` | 采样步数，越高通常越慢 |
 | `svcvc_cfg` | `1.0` | CFG 系数 |
-| `svcvc_seed` | `42` | 固定种子 |
+| `svcvc_seed` | `42` | 固定种子（0–4294967295） |
 | `svcvc_random_seed` | `false` | 每次使用随机种子 |
 
 固定种子且其他参数一致时可以命中持久缓存；开启随机种子后，SVCVC-API-SVF 默认不会读取或写入持久缓存。
