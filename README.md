@@ -76,16 +76,16 @@ qqmusic-api-python
 
 旧版 README 中的百度网盘整合包不再作为主要下载入口，请直接使用以下公开项目：
 
-| 项目 | 人声分离 | GPU 后端 | 适合场景 |
-|---|---|---|---|
-| [RVCSVC-API-amd](https://github.com/sdfsfsk/RVCSVC-API-amd) | UVR5 / HP5 | DirectML | 环境较轻、兼容范围较广 |
-| [RVCSVC-API-MSST](https://github.com/sdfsfsk/RVCSVC-API-MSST) | BS-Roformer / MSST | Windows AMD ROCm 7.2.1 | 更高分离质量、显存需求更高 |
-| [SVCVC-API-SVF](https://github.com/sdfsfsk/SVCVC-API-SVF) | SoulX-Singer 内置分离 | 轻量中间层 + 上游 Windows AMD ROCm | 零样本参考音色转换 |
+| 项目 | 中间层端口 | 上游依赖 | 人声分离 | 适合场景 |
+|---|---:|---|---|---|
+| [RVCSVC-API-amd](https://github.com/sdfsfsk/RVCSVC-API-amd) | `3333` / `9999` | RVC `2333` / SVC-Fusion `7777` | UVR5 / HP5 | 环境较轻、兼容范围较广 |
+| [RVCSVC-API-MSST](https://github.com/sdfsfsk/RVCSVC-API-MSST) | `3333` / `9999` | RVC `2333` / SVC-Fusion `7777` | BS-Roformer / MSST | 更高分离质量、显存需求更高 |
+| [SVCVC-API-SVF](https://github.com/sdfsfsk/SVCVC-API-SVF) | `6767` | SoulX-Singer SVC `7861` | SoulX / 内置 MSST / 不分离 | 零样本参考音色转换 |
 
 > [!CAUTION]
 > **完整推理方案仅支持 Windows AMD 显卡（A 卡），NVIDIA、Intel GPU 和纯 CPU 环境不在支持范围内。** `RVCSVC-API-amd` 与 `RVCSVC-API-MSST` 使用相同的 3333/9999 端口，只需选择其中一个，不能同时启动；`SVCVC-API-SVF` 使用 6767 端口，可以与前两者之一同时运行，但还需要应用 AMD 补丁的 SoulX-Singer 上游。
 
-公开仓库只包含源码和环境安装脚本，不包含已安装的 Python/ROCm 运行时、UVR5/MSST 权重、RVC/SVC/SoulX 模型、私人参考音色或歌曲缓存。请按照各项目 README 准备环境、上游引擎和分离模型。
+公开仓库只包含源码和环境安装脚本，不包含已安装的 Python/ROCm 运行时、UVR5/MSST 权重、RVC/SVC/SoulX 模型、私人参考音色或歌曲缓存。请按照各项目 README 准备环境、上游引擎和分离模型；SVCVC 的内置 MSST 权重下载链接、SHA-256 和放置路径已写在 [SVCVC-API-SVF README](https://github.com/sdfsfsk/SVCVC-API-SVF#msst-模型下载)。
 
 ### RVC
 
@@ -110,6 +110,8 @@ SoulX-SVCVC 使用参考音频进行零样本音色转换，不需要训练 `.pt
 - Windows AMD ROCm 补丁：[sdfsfsk/SoulX-Singer-AMD-Patch](https://github.com/sdfsfsk/SoulX-Singer-AMD-Patch)
 - 插件默认中间层：`http://127.0.0.1:6767/`
 - SoulX-Singer SVC 上游：`http://127.0.0.1:7861/`
+- 目标歌曲分离：`soulx`（默认、由上游分离）、`msst`（中间层内置 BS-Roformer）或 `none`（直接交给 SoulX）。
+- `msst` 模式需要完整的 `SVCVC-API-SVF/runtime-rocm/` 和模型权重；下载后无需依赖相邻的 `RVCSVC-API-MSST` 目录。
 
 启动顺序：
 
@@ -117,6 +119,8 @@ SoulX-SVCVC 使用参考音频进行零样本音色转换，不需要训练 `.pt
 2. 启动 SVCVC-API-SVF，等待 6767 就绪。
 3. 在插件配置中开启 `enable_svcvc`。
 4. 使用 `/刷新svcvc音色`。
+
+若选择 `msst` 并开启“自动混回伴奏”，请使用带 `soulx_svc_convert_external_acc_path` 接口的 AMD 补丁版 SoulX-Singer；中间层会在分离前检查该接口，缺失时会立即提示而不浪费整首歌的分离时间。
 
 参考音色放入 SVCVC-API-SVF 的 `voice_profiles/`。支持 WAV、FLAC、MP3、OGG、M4A 和 AAC；文件名默认作为音色 ID，也可添加同名 JSON：
 
