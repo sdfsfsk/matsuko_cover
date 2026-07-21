@@ -4288,7 +4288,7 @@ class MusicPlugin(Star):
             
             # === 使用建议 ===
             recommendation.append(f"\n💬 如何使用此推荐？")
-            recommendation.append(f"   直接说：'翻唱《{song_name or "歌曲名"}》'")
+            recommendation.append(f"   直接说：'翻唱《{song_name or '歌曲名'}》'")
             recommendation.append(f"   我会自动应用以上推荐的配置！")
             recommendation.append(f"\n⚙️ 如需修改偏好，可以说：")
             recommendation.append(f"   - '把默认模型改成第2个'")
