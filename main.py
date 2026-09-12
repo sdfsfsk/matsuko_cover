@@ -8,6 +8,7 @@ import asyncio
 import shutil
 import json
 import secrets
+import sys
 from datetime import datetime
 from typing import Optional, Dict, List, Any, Set
 import traceback
@@ -16,8 +17,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.message.components import Record, File
-from astrbot.api.message_components import Node, Plain, Image as CompImage
-from astrbot.core.utils.session_waiter import session_waiter, SessionController
+from astrbot.api.message_components import Image as CompImage
 from astrbot.api import logger
 from functools import partial
 from gradio_client import Client
@@ -27,13 +27,15 @@ try:
 except ImportError:
     QQ_MUSIC_AVAILABLE = False
 
+from .selection import CoverSelectionUI
+
 MODEL_ALIAS_SEPARATOR = "|||"
 
 @register(
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
     "RVC/SVC/SoulX-SVCVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈、QQ音乐风控自动重试）",
-    "2.10.3",
+    "2.12.0",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
@@ -52,6 +54,10 @@ class MusicPlugin(Star):
         self.qqmusic_retry_max_attempts = config.get("qqmusic_retry_max_attempts", 3)
         self.disable_netease = config.get("disable_netease", False)
         self.timeout = config.get("timeout", 60)
+        self.selection_ui = CoverSelectionUI(
+            buttons=bool(config.get("qq_official_buttons", True)),
+            config_getter=context.get_config,
+        )
         
         self.rvc_models_keywords = config.get("rvc_models_keywords", [])
         self.svc_models_keywords = config.get("svc_models_keywords", [])
@@ -165,7 +171,7 @@ class MusicPlugin(Star):
             self.svcvc_seed = 42
         self.svcvc_random_seed = bool(config.get("svcvc_random_seed", False))
         
-        # === MSST 分离参数（仅 RVCSVC-API-MSST 后端生效）===
+        # === MSST 分离参数（RVCSVC-API-MSST 与 SVCVC-API-SVF 的 MSST 模式）===
         # Follow the native recommendation of model_bs_roformer_ep_317_sdr_12.9755.
         # Batch size changes throughput/VRAM, while overlap materially affects
         # separation smoothness.  TTA is optional because it triples inference.
@@ -966,6 +972,21 @@ class MusicPlugin(Star):
                     else self.svcvc_seed
                 )
                 pitch_shift = self._effective_key_shift(api_type, key_shift)
+                svcvc_kwargs = {
+                    "song_name_src": song_name_src,
+                    "model_dropdown": model_name,
+                    "prompt_vocal_sep": self.svcvc_prompt_vocal_sep,
+                    "target_vocal_sep": self.svcvc_target_vocal_sep,
+                    "target_separation": self.svcvc_target_separation,
+                    "auto_shift": self.svcvc_auto_shift,
+                    "auto_mix_acc": self.svcvc_auto_mix_acc,
+                    "pitch_shift": pitch_shift,
+                    "n_step": self.svcvc_n_step,
+                    "cfg": self.svcvc_cfg,
+                    "seed": effective_seed,
+                    "random_seed": self.svcvc_random_seed,
+                }
+                svcvc_kwargs.update(self._get_svcvc_msst_kwargs(client))
                 logger.info(
                     "[SoulX-SVCVC参数Debug] "
                     f"profile={model_name} | prompt_sep={self.svcvc_prompt_vocal_sep} | "
@@ -973,22 +994,16 @@ class MusicPlugin(Star):
                     f"auto_shift={self.svcvc_auto_shift} | "
                     f"auto_mix={self.svcvc_auto_mix_acc} | pitch_shift={pitch_shift} | "
                     f"n_step={self.svcvc_n_step} | cfg={self.svcvc_cfg} | "
-                    f"seed={effective_seed} | random={self.svcvc_random_seed}"
+                    f"seed={effective_seed} | random={self.svcvc_random_seed} | "
+                    f"msst_model={svcvc_kwargs.get('msst_model', 'backend-default')} | "
+                    f"msst_batch={svcvc_kwargs.get('msst_batch_size', 'backend-default')} | "
+                    f"msst_overlap={svcvc_kwargs.get('msst_num_overlap', 'backend-default')} | "
+                    f"msst_normalize={svcvc_kwargs.get('msst_normalize', 'backend-default')} | "
+                    f"msst_tta={svcvc_kwargs.get('msst_use_tta', 'backend-default')}"
                 )
                 result, cache_hit = await self._async_predict(
                     client,
-                    song_name_src=song_name_src,
-                    model_dropdown=model_name,
-                    prompt_vocal_sep=self.svcvc_prompt_vocal_sep,
-                    target_vocal_sep=self.svcvc_target_vocal_sep,
-                    target_separation=self.svcvc_target_separation,
-                    auto_shift=self.svcvc_auto_shift,
-                    auto_mix_acc=self.svcvc_auto_mix_acc,
-                    pitch_shift=pitch_shift,
-                    n_step=self.svcvc_n_step,
-                    cfg=self.svcvc_cfg,
-                    seed=effective_seed,
-                    random_seed=self.svcvc_random_seed,
+                    **svcvc_kwargs,
                     api_name="/convert",
                     timeout=self.inference_timeout,
                     event=event,
@@ -1257,7 +1272,7 @@ class MusicPlugin(Star):
             parts = item_str.split(MODEL_ALIAS_SEPARATOR, 1)
             model_name = parts[0]
             alias = parts[1] if len(parts) > 1 and parts[1] else ""
-            display_name = alias or os.path.splitext(model_name)[0]
+            display_name = " ".join((alias or os.path.splitext(model_name)[0]).split())
             display_names.append(f"{index}. {display_name}")
             key_list.append(model_name)
         return "\n".join(display_names), key_list
@@ -1732,6 +1747,55 @@ class MusicPlugin(Star):
             return None
         return "/" + api_name.lstrip("/") in names
 
+    @staticmethod
+    def _client_api_parameter_names(client, api_name: str) -> Optional[Set[str]]:
+        """Return keyword parameter names advertised for one Gradio endpoint."""
+        endpoints = getattr(client, "endpoints", None)
+        if not endpoints:
+            return None
+        values = endpoints.values() if isinstance(endpoints, dict) else endpoints
+        expected = "/" + api_name.lstrip("/")
+        for endpoint in values:
+            name = getattr(endpoint, "api_name", None)
+            if not name or "/" + str(name).lstrip("/") != expected:
+                continue
+            parameters = getattr(endpoint, "parameters_info", None)
+            if parameters is None:
+                return None
+            return {
+                str(item["parameter_name"])
+                for item in parameters
+                if isinstance(item, dict) and item.get("parameter_name")
+            }
+        return None
+
+    def _get_svcvc_msst_kwargs(self, client) -> Dict[str, Any]:
+        """Send request-level MSST settings only to a compatible SVCVC backend."""
+        if self.svcvc_target_separation != "msst":
+            return {}
+        values = {
+            "msst_model": self.msst_default_model,
+            "msst_batch_size": self.msst_batch_size,
+            "msst_num_overlap": self.msst_num_overlap,
+            "msst_normalize": self.msst_normalize,
+            "msst_use_tta": self.msst_use_tta,
+        }
+        parameter_names = self._client_api_parameter_names(client, "/convert")
+        if parameter_names is None:
+            logger.warning(
+                "无法读取 SVCVC /convert 参数列表；为兼容旧后端，本次不提交插件 MSST 参数"
+            )
+            return {}
+        missing = sorted(set(values) - parameter_names)
+        if missing:
+            logger.warning(
+                "SVCVC-API-SVF 版本过旧，/convert 缺少 MSST 参数 %s；"
+                "本次沿用后端 config.json",
+                ", ".join(missing),
+            )
+            return {}
+        return values
+
     async def _get_msst_models_from_client(self, client) -> List[Dict[str, str]]:
         result = await self._async_predict(
             client, api_name="/show_msst_models", timeout=30
@@ -2116,10 +2180,14 @@ class MusicPlugin(Star):
             logger.error(f"切换 SVCVC 分离模型失败: {exc}")
             yield event.plain_result(f"❌ SVCVC 分离模型切换失败：{exc}")
             return
+        selected_id = str(result.get("id") or selected["id"])
+        self.msst_default_model = selected_id
+        self.config["msst_default_model"] = selected_id
+        self.config.save_config()
         yield event.plain_result(
             f"✅ SVCVC 分离模型已切换为：{result.get('name') or selected['name']}\n"
             f"模型 ID：{result.get('id') or selected['id']}\n"
-            "中间层已写入 config.json；之后的新任务会使用该模型，分离缓存按模型隔离。"
+            "中间层与插件配置均已同步；之后的新任务会使用该模型，分离缓存按模型隔离。"
         )
     
     @filter.command("刷新rvc模型")
@@ -2130,9 +2198,7 @@ class MusicPlugin(Star):
             yield event.plain_result("刷新成功！")
             display_str, _ = self.get_models_display_list(api_type="rvc")
             display_str = display_str or "未发现任何模型。"
-            chain=[Plain(f"当前 RVC 可用模型：\n{display_str}")]
-            node = Node(uin=1109587454, name="松子", content=chain)
-            await event.send(event.chain_result([node]))
+            await self.selection_ui.send_list(event, f"当前 RVC 可用模型：\n{display_str}")
         except Exception as e:
             logger.error(traceback.format_exc())
             yield event.plain_result(f"刷新 RVC 模型出错了: {e}")
@@ -2173,9 +2239,7 @@ class MusicPlugin(Star):
             yield event.plain_result("刷新成功！")
             display_str, _ = self.get_models_display_list(api_type="svc")
             display_str = display_str or "未发现任何模型。"
-            chain=[Plain(f"当前 SVC 可用模型：\n{display_str}")]
-            node = Node(uin=1109587454, name="松子", content=chain)
-            await event.send(event.chain_result([node]))
+            await self.selection_ui.send_list(event, f"当前 SVC 可用模型：\n{display_str}")
         except Exception as e:
             logger.error(traceback.format_exc())
             yield event.plain_result(f"刷新 SVC 模型出错了: {e}")
@@ -2215,9 +2279,7 @@ class MusicPlugin(Star):
             await self._update_models_from_api(api_type="svcvc")
             display_str, _ = self.get_models_display_list(api_type="svcvc")
             display_str = display_str or "未发现任何参考音色。"
-            chain = [Plain(f"当前 SoulX-SVCVC 可用参考音色：\n{display_str}")]
-            node = Node(uin=1109587454, name="松子", content=chain)
-            await event.send(event.chain_result([node]))
+            await self.selection_ui.send_list(event, f"当前 SoulX-SVCVC 可用参考音色：\n{display_str}")
         except Exception as e:
             logger.error(traceback.format_exc())
             yield event.plain_result(f"读取 SoulX-SVCVC 参考音色失败：{e}")
@@ -2404,21 +2466,22 @@ class MusicPlugin(Star):
     async def _handle_cover(self, event: AstrMessageEvent, api_type="rvc"):
         cmd = api_type
         args = event.message_str.replace(cmd, "").strip().split()
-        
+
         if not args:
             yield event.plain_result(f"用法: /{cmd} <歌名> [升降调]")
             return
 
         key_shift, song_name = (None if api_type == "svcvc" else 0), " ".join(args)
-        if args and args[-1].lstrip('-').isdigit():
+        if args and args[-1].lstrip("-").isdigit():
             try:
                 val = int(args[-1])
                 min_shift, max_shift = self._key_shift_range(api_type)
                 if min_shift <= val <= max_shift:
                     key_shift = val
                     song_name = " ".join(args[:-1]) if len(args) > 1 else ""
-            except ValueError: pass
-        
+            except ValueError:
+                pass
+
         if not song_name:
             yield event.plain_result("请输入歌名！")
             return
@@ -2430,97 +2493,86 @@ class MusicPlugin(Star):
         if not songs:
             yield event.plain_result("没能找到这首歌~")
             return
-        
-        await self._send_selection(event, songs)
-        yield event.plain_result(f"请在{self.timeout}秒内输入歌曲序号进行选择：")
-        
-        selected_song_index = None
-        id = event.get_sender_id()
-        
-        @session_waiter(timeout=self.timeout)
-        async def song_waiter(controller: SessionController, event: AstrMessageEvent):
-            if event.get_sender_id() != id:
-                return            
-            nonlocal selected_song_index
-            user_input = event.message_str.strip()
-            if user_input.isdigit() and 1 <= int(user_input) <= len(songs):
-                selected_song_index = int(user_input) - 1
-                controller.stop()
 
         try:
-            await song_waiter(event)
-        except TimeoutError:
-            yield event.plain_result("选择超时，操作已取消。")
-            return
-        
-        if selected_song_index is None:
-             return
-             
-        selected_song = songs[selected_song_index]
-
-        display_str, keys = self.get_models_display_list(api_type=api_type)
-        if not keys:
-            refresh_cmd = "/刷新svcvc音色" if api_type == "svcvc" else f"/刷新{api_type}模型"
-            yield event.plain_result(
-                f"当前没有可用的 {self._engine_display_name(api_type)} 模型/音色，"
-                f"请先使用 {refresh_cmd}。"
+            selected_song_index, event = await self.selection_ui.choose(
+                event,
+                "为您找到以下歌曲，请选择：",
+                [f"{song['name']} - {song['artists']}" for song in songs],
+                self.timeout,
             )
-            return
-        
-        chain=[Plain(f"已选歌曲: {selected_song['name']}\n使用: {self._engine_display_name(api_type)}\n\n可用模型/参考音色：\n{display_str}")]
-        node = Node(uin=1109587454, name="松子", content=chain)
-        await event.send(event.chain_result([node]))
-        yield event.plain_result(f"请在{self.timeout}秒内输入模型序号：")
-        
-        selected_model_index = None
-
-        @session_waiter(timeout=self.timeout)
-        async def model_waiter(controller: SessionController, event: AstrMessageEvent):
-            if event.get_sender_id() != id:
-                return    
-            nonlocal selected_model_index
-            user_input = event.message_str.strip()
-            if user_input.isdigit() and 1 <= int(user_input) <= len(keys):
-                selected_model_index = int(user_input) - 1
-                controller.stop()
-
-        try:
-            await model_waiter(event)
+            if selected_song_index is None:
+                await event.send(event.plain_result("已取消选歌。"))
+                return
+            selected_song = songs[selected_song_index]
+            display_str, keys = self.get_models_display_list(api_type=api_type)
+            if not keys:
+                refresh_cmd = (
+                    "/刷新svcvc音色" if api_type == "svcvc" else f"/刷新{api_type}模型"
+                )
+                yield event.plain_result(
+                    f"当前没有可用的 {self._engine_display_name(api_type)} 模型/音色，"
+                    f"请先使用 {refresh_cmd}。"
+                )
+                return
+            selected_model_index, event = await self.selection_ui.choose(
+                event,
+                f"已选歌曲：{selected_song['name']}\n使用：{self._engine_display_name(api_type)}\n请选择模型/参考音色：",
+                [line.split(". ", 1)[1] for line in display_str.splitlines()],
+                self.timeout,
+            )
         except TimeoutError:
             yield event.plain_result("选择超时，操作已取消。")
             return
-
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
+            return
         if selected_model_index is None:
-             return
+            await event.send(event.plain_result("已取消音色选择。"))
+            return
 
         selected_model = keys[selected_model_index]
 
-        yield event.plain_result(f"正在使用 {self._engine_display_name(api_type)} 模型/音色【{selected_model}】为您生成《{selected_song['name']}》，请耐心等待...")
-        await self._send_song(event=event, song=selected_song, model_name=selected_model, key_shift=key_shift, api_type=api_type)
+        await event.send(
+            event.plain_result(
+                f"正在使用 {self._engine_display_name(api_type)} 模型/音色【{selected_model}】为您生成《{selected_song['name']}》，请耐心等待..."
+            )
+        )
+        await self._send_song(
+            event=event,
+            song=selected_song,
+            model_name=selected_model,
+            key_shift=key_shift,
+            api_type=api_type,
+        )
 
     async def _handle_qq_cover(self, event: AstrMessageEvent, api_type="rvc"):
-        cmd = {"rvc": "qqrvc", "svc": "qqsvc", "svcvc": "qqsvcvc"}.get(api_type, f"qq{api_type}")
+        cmd = {"rvc": "qqrvc", "svc": "qqsvc", "svcvc": "qqsvcvc"}.get(
+            api_type, f"qq{api_type}"
+        )
         args = event.message_str.replace(cmd, "").strip().split()
-        
+
         if not args:
             yield event.plain_result(f"用法: /{cmd} <歌名> [升降调]")
             return
 
         key_shift, song_name = (None if api_type == "svcvc" else 0), " ".join(args)
-        if args and args[-1].lstrip('-').isdigit():
+        if args and args[-1].lstrip("-").isdigit():
             try:
                 val = int(args[-1])
                 min_shift, max_shift = self._key_shift_range(api_type)
                 if min_shift <= val <= max_shift:
                     key_shift = val
                     song_name = " ".join(args[:-1]) if len(args) > 1 else ""
-            except ValueError: pass
-        
+            except ValueError:
+                pass
+
         if not song_name:
             yield event.plain_result("请输入歌名！")
             return
 
         from .api import QQMusicAPI
+
         api_key = self.config.get("third_party_api_key", "")
         qq_api = QQMusicAPI(api_key=api_key)
         try:
@@ -2531,82 +2583,86 @@ class MusicPlugin(Star):
             if not songs:
                 yield event.plain_result("在QQ音乐没能找到这首歌~")
                 return
-            
-            yield event.plain_result(f"🎵 QQ音乐搜索结果：")
-            await self._send_selection(event, songs)
-            yield event.plain_result(f"请在{self.timeout}秒内输入歌曲序号进行选择：")
-            
-            selected_song_index = None
-            id = event.get_sender_id()
-            
-            @session_waiter(timeout=self.timeout)
-            async def song_waiter(controller: SessionController, event: AstrMessageEvent):
-                if event.get_sender_id() != id:
-                    return            
-                nonlocal selected_song_index
-                user_input = event.message_str.strip()
-                if user_input.isdigit() and 1 <= int(user_input) <= len(songs):
-                    selected_song_index = int(user_input) - 1
-                    controller.stop()
 
             try:
-                await song_waiter(event)
-            except TimeoutError:
-                yield event.plain_result("选择超时，操作已取消。")
-                return
-            
-            if selected_song_index is None:
-                 return
-                 
-            selected_song = songs[selected_song_index]
-
-            display_str, keys = self.get_models_display_list(api_type=api_type)
-            if not keys:
-                refresh_cmd = "/刷新svcvc音色" if api_type == "svcvc" else f"/刷新{api_type}模型"
-                yield event.plain_result(
-                    f"当前没有可用的 {self._engine_display_name(api_type)} 模型/音色，"
-                    f"请先使用 {refresh_cmd}。"
+                selected_song_index, event = await self.selection_ui.choose(
+                    event,
+                    "QQ 音乐搜索结果，请选择：",
+                    [f"{song['name']} - {song['artists']}" for song in songs],
+                    self.timeout,
                 )
-                return
-            
-            chain=[Plain(f"[QQ音乐] 已选歌曲: {selected_song['name']}\n使用: {self._engine_display_name(api_type)}\n\n可用模型/参考音色：\n{display_str}")]
-            node = Node(uin=1109587454, name="松子", content=chain)
-            await event.send(event.chain_result([node]))
-            yield event.plain_result(f"请在{self.timeout}秒内输入模型序号：")
-            
-            selected_model_index = None
-
-            @session_waiter(timeout=self.timeout)
-            async def model_waiter(controller: SessionController, event: AstrMessageEvent):
-                if event.get_sender_id() != id:
-                    return    
-                nonlocal selected_model_index
-                user_input = event.message_str.strip()
-                if user_input.isdigit() and 1 <= int(user_input) <= len(keys):
-                    selected_model_index = int(user_input) - 1
-                    controller.stop()
-
-            try:
-                await model_waiter(event)
+                if selected_song_index is None:
+                    await event.send(event.plain_result("已取消选歌。"))
+                    return
+                selected_song = songs[selected_song_index]
+                display_str, keys = self.get_models_display_list(api_type=api_type)
+                if not keys:
+                    refresh_cmd = (
+                        "/刷新svcvc音色"
+                        if api_type == "svcvc"
+                        else f"/刷新{api_type}模型"
+                    )
+                    yield event.plain_result(
+                        f"当前没有可用的 {self._engine_display_name(api_type)} 模型/音色，"
+                        f"请先使用 {refresh_cmd}。"
+                    )
+                    return
+                selected_model_index, event = await self.selection_ui.choose(
+                    event,
+                    f"已选歌曲：{selected_song['name']}\n使用：{self._engine_display_name(api_type)}\n请选择模型/参考音色：",
+                    [line.split(". ", 1)[1] for line in display_str.splitlines()],
+                    self.timeout,
+                )
             except TimeoutError:
                 yield event.plain_result("选择超时，操作已取消。")
                 return
-
+            except ValueError as exc:
+                yield event.plain_result(str(exc))
+                return
             if selected_model_index is None:
-                 return
+                await event.send(event.plain_result("已取消音色选择。"))
+                return
 
             selected_model = keys[selected_model_index]
 
-            yield event.plain_result(f"🎵 正在使用 {self._engine_display_name(api_type)} 模型/音色【{selected_model}】为您生成《{selected_song['name']}》（QQ音乐），请耐心等待...")
-            await self._send_song(event=event, song=selected_song, model_name=selected_model, key_shift=key_shift, api_type=api_type)
+            await event.send(
+                event.plain_result(
+                    f"🎵 正在使用 {self._engine_display_name(api_type)} 模型/音色【{selected_model}】为您生成《{selected_song['name']}》（QQ音乐），请耐心等待..."
+                )
+            )
+            await self._send_song(
+                event=event,
+                song=selected_song,
+                model_name=selected_model,
+                key_shift=key_shift,
+                api_type=api_type,
+            )
         finally:
             await qq_api.close()
 
-    async def _send_selection(self, event: AstrMessageEvent, songs: list):
-        formatted_songs = [f"{i + 1}. {s['name']} - {s['artists']}" for i, s in enumerate(songs[:10])]
-        chain=[Plain("为您找到以下歌曲：\n" + "\n".join(formatted_songs))]
-        node = Node(uin=1109587454, name="松子", content=chain)
-        await event.send(event.chain_result([node]))
+    async def initialize(self):
+        """Bind QQ callback handlers to platform clients already loaded."""
+        self.selection_ui.bind_platforms(self.context.platform_manager.platform_insts)
+
+    @filter.on_platform_loaded(priority=sys.maxsize)
+    async def on_qq_platform_loaded(self):
+        """Bind callbacks before newly loaded QQ clients connect."""
+        await self.initialize()
+
+    @filter.command("翻唱选择")
+    async def expired_selection(
+        self, event: AstrMessageEvent, token: str = "", choice: str = ""
+    ):
+        """Explain command buttons that have no active selection waiter.
+
+        Args:
+            event: Message containing a stale or unauthorized button command.
+            token: Menu identifier retained by the old button.
+            choice: Selection action retained by the old button.
+        """
+        yield event.plain_result(
+            "这个选择菜单已过期，或不属于你。请重新发送点歌命令，再使用新菜单。"
+        )
 
     async def _send_song(self, event: AstrMessageEvent, song: dict, model_name: str, key_shift: Optional[int], api_type="rvc"):
         result_path = None
@@ -4845,6 +4901,7 @@ class MusicPlugin(Star):
     async def terminate(self):
         """插件卸载时清理资源"""
         logger.info("[MatsukoCover] 正在清理资源...")
+        await self.selection_ui.close()
         
         # 取消所有待处理的任务
         if hasattr(self, '_pending_tasks') and self._pending_tasks:

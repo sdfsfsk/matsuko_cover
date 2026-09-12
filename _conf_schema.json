@@ -55,6 +55,12 @@
     "hint": "开启后，网易云音乐功能将被完全禁用（包括LLM自动调用翻唱工具和手动命令），所有点歌请求将强制使用QQ音乐。推荐开启以获取更全的音乐版权。",
     "default": false
   },
+  "qq_official_buttons": {
+    "description": "自动识别 QQ 官方机器人并启用交互按钮",
+    "type": "bool",
+    "hint": "开启后自动识别 QQ 官方机器人，使用点击即生效的回调按钮选歌、选音色、翻页和取消，无需发送确认消息，仅点歌者可操作。首次升级后请重启 QQ 官方机器人平台连接以订阅 INTERACTION_CREATE；Webhook 模式需在 QQ 开发者后台开启互动事件推送。按钮、Markdown 权限或订阅不可用时使用文字菜单。",
+    "default": true
+  },
   "timeout": {
     "description": "等待用户选择的超时时间（秒）",
     "type": "int",
@@ -300,31 +306,31 @@
   "msst_default_model": {
     "description": "MSST 默认人声分离模型",
     "type": "string",
-    "hint": "【仅RVCSVC-API-MSST后端有效】默认使用的 MSST 模型 ID。使用 /列出msst模型 查看列表，使用 /切换msst模型 切换。RVCSVC-API-amd 后端会自动忽略此项。",
+    "hint": "【RVCSVC-API-MSST 及 SVCVC-API-SVF 的 MSST 模式有效】默认使用的 MSST 模型 ID。使用 /列出msst模型 或 /列出svcvc分离模型 查看列表，使用对应切换指令修改。RVCSVC-API-amd 后端会自动忽略此项。",
     "default": "bs_roformer_ep_317_sdr_12.9755"
   },
   "msst_batch_size": {
     "description": "MSST 批处理大小 (Batch Size)",
     "type": "int",
-    "hint": "【仅RVCSVC-API-MSST后端有效】控制MSST分离时的显存占用与吞吐。model_bs_roformer_ep_317_sdr_12.9755 原生推荐 1；增大主要提升速度，不直接提升音质，并会增加显存占用。",
+    "hint": "【RVCSVC-API-MSST 及 SVCVC-API-SVF 的 MSST 模式有效】控制MSST分离时的显存占用与吞吐。model_bs_roformer_ep_317_sdr_12.9755 原生推荐 1；增大主要提升速度，不直接提升音质，并会增加显存占用。",
     "default": 1
   },
   "msst_num_overlap": {
     "description": "MSST 重叠次数 (Num Overlap)",
     "type": "int",
-    "hint": "【仅RVCSVC-API-MSST后端有效】控制MSST分离的平滑度。默认 4。值越大边缘越平滑但速度成倍下降，值越小速度越快但可能产生轻微咔哒声。使用amd后端时此参数无效。",
+    "hint": "【RVCSVC-API-MSST 及 SVCVC-API-SVF 的 MSST 模式有效】控制MSST分离的平滑度。默认 4。值越大边缘越平滑但速度成倍下降，值越小速度越快但可能产生轻微咔哒声。使用 RVCSVC-API-amd 后端时此参数无效。",
     "default": 4
   },
   "msst_normalize": {
     "description": "MSST 音频归一化 (Normalize)",
     "type": "bool",
-    "hint": "【仅RVCSVC-API-MSST后端有效】分离前标准化音量。model_bs_roformer_ep_317_sdr_12.9755 原生配置未启用，默认关闭以保持训练时幅度分布；异常小声/大声素材可手动开启。",
+    "hint": "【RVCSVC-API-MSST 及 SVCVC-API-SVF 的 MSST 模式有效】分离前标准化音量。model_bs_roformer_ep_317_sdr_12.9755 原生配置未启用，默认关闭以保持训练时幅度分布；异常小声/大声素材可手动开启。",
     "default": false
   },
   "msst_use_tta": {
     "description": "MSST 测试时增强 (TTA)",
     "type": "bool",
-    "hint": "【仅RVCSVC-API-MSST后端有效】分别对原始、左右声道交换和反相音频推理后取平均，可能进一步减少泄漏，但耗时约为3倍。默认关闭，追求极致分离时再开启。",
+    "hint": "【RVCSVC-API-MSST 及 SVCVC-API-SVF 的 MSST 模式有效】分别对原始、左右声道交换和反相音频推理后取平均，可能进一步减少泄漏，但耗时约为3倍。默认关闭，追求极致分离时再开启。",
     "default": false
   },
   "uvr5_agg": {
