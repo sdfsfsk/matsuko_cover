@@ -25,6 +25,69 @@ PAGE_SIZE = 8
 CHOICE_COMMAND = "翻唱选择"
 
 
+def escape_markdown(text: str) -> str:
+    """Escape dynamic text while leaving the card's own formatting intact.
+
+    Args:
+        text: Song, model, or status text to render literally.
+
+    Returns:
+        Text safe to insert into QQ Markdown.
+    """
+    return re.sub(r"([\\`*_{}\[\]()#+.!|>~<\-])", r"\\\1", str(text))
+
+
+async def send_qq_markdown(event: AstrMessageEvent, content: str, rows=None) -> None:
+    """Send an official card with optional buttons using this event's reply ID.
+
+    Args:
+        event: Destination event, including callback reply proxies.
+        content: Formatted Markdown content.
+        rows: Optional native keyboard rows.
+
+    Raises:
+        ValueError: If the event has no supported QQ destination.
+        RuntimeError: If QQ does not acknowledge the message.
+    """
+    source = event.message_obj.raw_message
+    api = event.bot.api
+    if getattr(source, "group_openid", None):
+        send = api.post_group_message
+        destination = {"group_openid": source.group_openid, "msg_type": 2}
+    elif getattr(getattr(source, "author", None), "user_openid", None):
+        send = api.post_c2c_message
+        destination = {"openid": source.author.user_openid, "msg_type": 2}
+    elif getattr(source, "guild_id", None) and not getattr(source, "channel_id", None):
+        send = api.post_dms
+        destination = {"guild_id": source.guild_id}
+    elif getattr(source, "channel_id", None):
+        from botpy.message import DirectMessage
+
+        if isinstance(source, DirectMessage):
+            send = api.post_dms
+            destination = {"guild_id": source.guild_id}
+        else:
+            send = api.post_message
+            destination = {"channel_id": source.channel_id}
+    else:
+        raise ValueError("Unsupported QQ message destination")
+    payload = {
+        **destination,
+        "msg_id": event.message_obj.message_id,
+        "markdown": {"content": content},
+    }
+    if rows:
+        payload["keyboard"] = {"content": {"rows": rows}}
+    if "msg_type" in destination:
+        payload["msg_seq"] = secrets.randbelow(900_000) + 10_001
+    result = await asyncio.wait_for(send(**payload), timeout=15)
+    if result is None or (
+        isinstance(result, dict) and (result.get("code") or not result.get("id"))
+    ):
+        raise RuntimeError("QQ card message was not acknowledged")
+    event._has_send_oper = True
+
+
 class _ChoiceFilter(SessionFilter):
     """Only route selection replies from the menu owner in the same conversation."""
 
@@ -94,6 +157,7 @@ class _Menu:
         token: str,
         buttons: bool,
         prefix: str = "/",
+        cards: bool = True,
     ):
         self.title = str(title)[:300]
         self.choices = [" ".join(str(choice).split())[:200] for choice in choices]
@@ -101,6 +165,8 @@ class _Menu:
         self.token = token
         self.buttons = buttons
         self.prefix = prefix
+        self.cards = cards
+        self.callback = True
         self.page = 0
         self.pages = (len(choices) + PAGE_SIZE - 1) // PAGE_SIZE
         self.notice = ""
@@ -125,9 +191,24 @@ class _Menu:
             text += "\n" + self.notice
 
         official = event.get_platform_name() in OFFICIAL_PLATFORMS
-        if official and self.buttons:
+        title_lines = self.title.splitlines() or ["请选择"]
+        markdown = "## " + escape_markdown(title_lines[0])
+        if len(title_lines) > 1:
+            markdown += "\n\n" + "\n".join(
+                "> " + escape_markdown(line) for line in title_lines[1:]
+            )
+        markdown += "\n\n" + "\n\n".join(
+            f"**{i}.** {escape_markdown(label)}" for i, label in visible
+        )
+        markdown += (
+            f"\n\n***\n> 第 {self.page + 1}/{self.pages} 页 · 共 {len(self.choices)} 项"
+            f"\n> 请在 {self.timeout} 秒内选择；发送序号也可以，发送“取消”结束。"
+        )
+        if self.pages > 1:
+            markdown += "\n> 可发送“上一页”或“下一页”翻页。"
+        if official and self.cards and self.buttons:
             try:
-                await self._send_buttons(event, text, visible)
+                await self._send_buttons(event, markdown, visible)
                 return
             except Exception as exc:
                 logger.warning(
@@ -135,6 +216,14 @@ class _Menu:
                 )
                 self.buttons = False
                 text += "\n按钮暂不可用，请直接发送序号选择。"
+                markdown += "\n> 按钮暂不可用，请直接发送序号选择。"
+        if official and self.cards:
+            try:
+                await send_qq_markdown(event, markdown)
+                return
+            except Exception as exc:
+                logger.warning("[MatsukoCover] QQ card failed: %s", type(exc).__name__)
+                self.cards = False
         if event.get_platform_name() == "aiocqhttp":
             await event.send(
                 event.chain_result(
@@ -158,32 +247,6 @@ class _Menu:
             RuntimeError: If the SDK does not return a successful message.
             ValueError: If this QQ event has no supported message destination.
         """
-        source = event.message_obj.raw_message
-        api = event.bot.api
-        if getattr(source, "group_openid", None):
-            send = api.post_group_message
-            destination = {"group_openid": source.group_openid, "msg_type": 2}
-        elif getattr(getattr(source, "author", None), "user_openid", None):
-            send = api.post_c2c_message
-            destination = {"openid": source.author.user_openid, "msg_type": 2}
-        elif getattr(source, "guild_id", None) and not getattr(
-            source, "channel_id", None
-        ):
-            send = api.post_dms
-            destination = {"guild_id": source.guild_id}
-        elif getattr(source, "channel_id", None):
-            # Guild DMs carry both guild_id and channel_id in the SDK.
-            from botpy.message import DirectMessage
-
-            if isinstance(source, DirectMessage):
-                send = api.post_dms
-                destination = {"guild_id": source.guild_id}
-            else:
-                send = api.post_message
-                destination = {"channel_id": source.channel_id}
-        else:
-            raise ValueError("Unsupported QQ message destination")
-
         buttons = []
         actions = [(str(i), f"{i}. {label}"[:10]) for i, label in visible]
         for action, label in actions:
@@ -196,12 +259,17 @@ class _Menu:
                         "style": 1,
                     },
                     "action": {
-                        "type": 1,
+                        "type": 1 if self.callback else 2,
+                        **({} if self.callback else {"enter": True}),
                         "permission": {
                             "type": 0,
                             "specify_user_ids": [str(event.get_sender_id())],
                         },
-                        "data": f"{CALLBACK_PREFIX}{self.token}:{action}",
+                        "data": (
+                            f"{CALLBACK_PREFIX}{self.token}:{action}"
+                            if self.callback
+                            else f"{self.prefix}{CHOICE_COMMAND} {self.token} {action}"
+                        ),
                         "unsupport_tips": "请发送对应序号选择",
                     },
                 }
@@ -220,40 +288,36 @@ class _Menu:
                     "id": action,
                     "render_data": {"label": label, "visited_label": label, "style": 0},
                     "action": {
-                        "type": 1,
+                        "type": 1 if self.callback else 2,
+                        **({} if self.callback else {"enter": True}),
                         "permission": {
                             "type": 0,
                             "specify_user_ids": [str(event.get_sender_id())],
                         },
-                        "data": f"{CALLBACK_PREFIX}{self.token}:{action}",
+                        "data": (
+                            f"{CALLBACK_PREFIX}{self.token}:{action}"
+                            if self.callback
+                            else f"{self.prefix}{CHOICE_COMMAND} {self.token} {action}"
+                        ),
                         "unsupport_tips": f"请发送“{label}”",
                     },
                 }
             )
         rows.append({"buttons": controls})
-        text += "\n点击按钮即可选择，无需再发送确认消息。"
-        escaped = re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", text)
-        payload = {
-            **destination,
-            "msg_id": event.message_obj.message_id,
-            "markdown": {"content": escaped},
-            "keyboard": {"content": {"rows": rows}},
-        }
-        if "msg_type" in destination:
-            payload["msg_seq"] = secrets.randbelow(900_000) + 10_001
-        result = await asyncio.wait_for(send(**payload), timeout=15)
-        if result is None or (
-            isinstance(result, dict) and (result.get("code") or not result.get("id"))
-        ):
-            raise RuntimeError("QQ button message was not acknowledged")
-        event._has_send_oper = True
+        text += (
+            "\n> 点击按钮即可选择，无需再发送确认消息。"
+            if self.callback
+            else "\n> 点击按钮会自动发送选择指令，无需手动确认。"
+        )
+        await send_qq_markdown(event, text, rows)
 
 
 class CoverSelectionUI:
     """Own pending menus so reload and cancellation release their waiters."""
 
-    def __init__(self, buttons: bool = True, config_getter=None):
+    def __init__(self, buttons: bool = True, config_getter=None, cards: bool = True):
         self.buttons = buttons
+        self.cards = cards
         self.config_getter = config_getter
         self._pending: dict[str, asyncio.Task] = {}
         self.callbacks = QQCallbackBridge()
@@ -301,13 +365,18 @@ class CoverSelectionUI:
         )
         prefixes = config.get("wake_prefix", ["/"])
         prefix = next((value for value in prefixes if isinstance(value, str)), "/")
-        menu = _Menu(title, choices, max(1, int(timeout)), token, self.buttons, prefix)
+        menu = _Menu(
+            title,
+            choices,
+            max(1, int(timeout)),
+            token,
+            self.buttons,
+            prefix,
+            self.cards,
+        )
         if self.buttons and event.get_platform_name() in OFFICIAL_PLATFORMS:
             if not self.callbacks.bind(event.bot, event.get_platform_name()):
-                menu.buttons = False
-                menu.notice = (
-                    "回调订阅待生效，请重启 QQ 官方机器人平台连接。当前可发送序号选择。"
-                )
+                menu.callback = False
         session_filter = _ChoiceFilter(event, token, key, prefix)
         waiter = SessionWaiter(session_filter, key, record_history_chains=False)
         selected = None
@@ -347,7 +416,12 @@ class CoverSelectionUI:
             reply.message_str = f"{prefix}{CHOICE_COMMAND} {token} {action}"
             await SessionWaiter.trigger(key, reply)
 
-        if menu.buttons and event.get_platform_name() in OFFICIAL_PLATFORMS:
+        if (
+            menu.buttons
+            and menu.cards
+            and menu.callback
+            and event.get_platform_name() in OFFICIAL_PLATFORMS
+        ):
             self.callbacks.targets[token] = CallbackTarget(
                 event=event,
                 handler=on_callback,
@@ -397,10 +471,93 @@ class CoverSelectionUI:
                 )
             )
             return
-        for offset in range(0, len(text), 3000):
-            await event.send(
-                event.plain_result(text[offset : offset + 3000]).use_markdown(False)
-            )
+        await self.send_card(event, "🎙️ 翻唱音色", text)
+
+    async def send_card(
+        self, event: AstrMessageEvent, title: str, text: str, actions=()
+    ) -> None:
+        """Render reusable help, model and status cards with text fallback.
+
+        Args:
+            event: Destination message event.
+            title: Short card heading.
+            text: Plain content, escaped separately from Markdown styling.
+            actions: Optional (label, command) shortcuts routed through AstrBot.
+        """
+        text = str(text)
+        if self.cards and event.get_platform_name() in OFFICIAL_PLATFORMS:
+            rows = []
+            if self.buttons and actions:
+                config = (
+                    self.config_getter(umo=event.unified_msg_origin)
+                    if self.config_getter
+                    else {}
+                )
+                prefix = next(
+                    (
+                        value
+                        for value in config.get("wake_prefix", ["/"])
+                        if isinstance(value, str)
+                    ),
+                    "/",
+                )
+                buttons = [
+                    {
+                        "id": f"command_{index}",
+                        "render_data": {"label": label[:10], "style": 0},
+                        "action": {
+                            "type": 2,
+                            "enter": True,
+                            "permission": {
+                                "type": 0,
+                                "specify_user_ids": [str(event.get_sender_id())],
+                            },
+                            "data": prefix + command,
+                            "unsupport_tips": f"请发送 {prefix}{command}",
+                        },
+                    }
+                    for index, (label, command) in enumerate(actions[:10])
+                ]
+                rows = [
+                    {"buttons": buttons[index : index + 2]}
+                    for index in range(0, len(buttons), 2)
+                ]
+            for offset in range(0, max(1, len(text)), 1800):
+                chunk = text[offset : offset + 1800]
+                lines = []
+                for line in chunk.splitlines():
+                    if re.fullmatch(r"\s*[=─━]{3,}\s*", line):
+                        continue
+                    field = re.fullmatch(r"\s*([^：:\n]{2,24})(?:：|: )\s*(.*)", line)
+                    lines.append(
+                        f"**{escape_markdown(field[1])}**：{escape_markdown(field[2])}"
+                        if field
+                        else escape_markdown(line)
+                    )
+                markdown = "## " + escape_markdown(title) + "\n\n" + "\n".join(lines)
+                try:
+                    await send_qq_markdown(
+                        event, markdown, rows if offset == 0 else None
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "[MatsukoCover] QQ info card failed: %s", type(exc).__name__
+                    )
+                if rows and offset == 0:
+                    try:
+                        await send_qq_markdown(event, markdown)
+                        continue
+                    except Exception as exc:
+                        logger.warning(
+                            "[MatsukoCover] QQ info card fallback failed: %s",
+                            type(exc).__name__,
+                        )
+                await event.send(
+                    event.plain_result(f"{title}\n\n{chunk}").use_markdown(False)
+                )
+            return
+        await event.send(event.plain_result(f"{title}\n\n{text}").use_markdown(False))
 
     async def close(self) -> None:
         """Cancel pending menus, including sends, and await waiter cleanup."""

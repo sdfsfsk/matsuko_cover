@@ -171,15 +171,18 @@ async def test_existing_connection_requires_restart_even_after_plugin_reload():
 
 
 @pytest.mark.asyncio
-async def test_unsubscribed_connection_shows_text_instead_of_dead_buttons():
+async def test_unsubscribed_connection_uses_auto_send_buttons_with_card():
     event = FakeEvent()
     event.bot._connection = object()
     ui = CoverSelectionUI()
     task = asyncio.create_task(ui.choose(event, "选歌", ["A"], 30))
     await wait_for_menu(event)
-    event.bot.api.post_group_message.assert_not_awaited()
-    assert "回调订阅待生效" in event.sent[0].get_plain_text()
-    reply = FakeEvent("取消")
+    payload = event.bot.api.post_group_message.await_args.kwargs
+    assert payload["markdown"]["content"].startswith("## 选歌")
+    action = payload["keyboard"]["content"]["rows"][-1]["buttons"][-1]["action"]
+    assert action["type"] == 2 and action["enter"] is True
+    assert not ui.callbacks.targets
+    reply = FakeEvent(action["data"])
     await dispatch(reply)
     assert await task == (None, reply)
     await ui.close()

@@ -151,9 +151,10 @@ async def test_native_payload_has_owner_scoped_buttons_and_correct_route(
     payload = getattr(event.bot.api, method).await_args.kwargs
     assert destination in payload
     assert payload["msg_id"] == "input-1"
-    assert "1\\. 很长的歌曲名称0" in payload["markdown"]["content"]
-    assert "8\\. 很长的歌曲名称7" in payload["markdown"]["content"]
-    assert "9\\. 很长的歌曲名称8" not in payload["markdown"]["content"]
+    assert payload["markdown"]["content"].startswith("## 选择歌曲")
+    assert "**1.** 很长的歌曲名称0" in payload["markdown"]["content"]
+    assert "**8.** 很长的歌曲名称7" in payload["markdown"]["content"]
+    assert "**9.** 很长的歌曲名称8" not in payload["markdown"]["content"]
     rows = payload["keyboard"]["content"]["rows"]
     assert len(rows) == 5
     assert all(len(row["buttons"]) <= 5 for row in rows)
@@ -191,14 +192,13 @@ async def test_native_failure_always_sends_visible_plain_choices(failure):
     assert "按钮暂不可用" in text
     assert not any(isinstance(part, Node) for part in event.sent[0].chain)
     await menu.send(event)
-    assert event.bot.api.post_group_message.await_count == 1
+    assert event.bot.api.post_group_message.await_count == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("platform", "buttons", "node"),
     [
-        ("qq_official", False, False),
         ("aiocqhttp", True, True),
         ("telegram", True, False),
     ],
@@ -245,7 +245,7 @@ async def test_pagination_uses_latest_reply_and_preserves_absolute_indices():
     next_payload = event.bot.api.post_group_message.await_args.kwargs
     assert next_payload["event_id"] == "INTERACTION_CREATE:page-click"
     assert "msg_id" not in next_payload
-    assert "9\\. 音色8" in next_payload["markdown"]["content"]
+    assert "**9.** 音色8" in next_payload["markdown"]["content"]
     choice = next_payload["keyboard"]["content"]["rows"][0]["buttons"][1]["action"][
         "data"
     ]
@@ -351,7 +351,7 @@ async def test_timeout_and_plugin_unload_remove_sessions():
 async def test_total_send_failure_removes_session():
     event = FakeEvent()
     event.send = AsyncMock(side_effect=RuntimeError("offline"))
-    ui = CoverSelectionUI(buttons=False)
+    ui = CoverSelectionUI(buttons=False, cards=False)
     with pytest.raises(RuntimeError, match="offline"):
         await ui.choose(event, "选歌", ["A"], 30)
     assert not ui._pending
@@ -429,3 +429,98 @@ async def test_buttons_follow_the_conversation_wake_prefix(prefix):
     await dispatch(reply)
     assert await task == (0, reply)
     assert origins == [event.unified_msg_origin]
+
+
+@pytest.mark.asyncio
+async def test_disabled_buttons_keep_markdown_card():
+    event = FakeEvent()
+    ui = CoverSelectionUI(buttons=False)
+    task = asyncio.create_task(ui.choose(event, "选歌", ["A"], 30))
+    await wait_for_menu(event)
+    payload = event.bot.api.post_group_message.await_args.kwargs
+    assert payload["markdown"]["content"].startswith("## 选歌")
+    assert "keyboard" not in payload
+    reply = FakeEvent("1")
+    await dispatch(reply)
+    assert await task == (0, reply)
+    await ui.close()
+
+
+@pytest.mark.asyncio
+async def test_disabled_cards_use_text_and_do_not_register_callback_targets():
+    event = FakeEvent()
+    ui = CoverSelectionUI(cards=False)
+    task = asyncio.create_task(ui.choose(event, "选歌", ["A"], 30))
+    await wait_for_menu(event)
+    assert "1. A" in event.sent[0].get_plain_text()
+    event.bot.api.post_group_message.assert_not_awaited()
+    assert not ui.callbacks.targets
+    await dispatch(FakeEvent("取消"))
+    await task
+    await ui.close()
+
+
+@pytest.mark.asyncio
+async def test_keyboard_failure_keeps_card_and_next_page_has_no_keyboard():
+    event = FakeEvent()
+
+    async def send(**payload):
+        if "keyboard" in payload:
+            raise PermissionError("keyboard denied")
+        return {"id": "markdown-only"}
+
+    event.bot.api.post_group_message.side_effect = send
+    menu = _Menu("选择歌曲", [str(i) for i in range(10)], 30, "token", True)
+    await menu.send(event)
+    payload = event.bot.api.post_group_message.await_args.kwargs
+    assert "keyboard" not in payload
+    assert "**1.** 0" in payload["markdown"]["content"]
+    assert "按钮暂不可用" in payload["markdown"]["content"]
+    menu.page = 1
+    await menu.send(event)
+    assert event.bot.api.post_group_message.await_count == 3
+    assert (
+        "**9.** 8"
+        in event.bot.api.post_group_message.await_args.kwargs["markdown"]["content"]
+    )
+    assert not event.sent
+
+
+@pytest.mark.asyncio
+async def test_untrusted_labels_do_not_override_card_formatting():
+    event = FakeEvent()
+    menu = _Menu(
+        "选歌 [link](https://bad.test)", ["**name** <@everyone>"], 30, "token", False
+    )
+    await menu.send(event)
+    text = event.bot.api.post_group_message.await_args.kwargs["markdown"]["content"]
+    assert text.startswith("## 选歌 \\[link\\]")
+    assert "**1.** \\*\\*name\\*\\* \\<@everyone\\>" in text
+
+
+@pytest.mark.asyncio
+async def test_info_card_shortcuts_use_owner_and_wake_prefix():
+    event = FakeEvent()
+    ui = CoverSelectionUI(config_getter=lambda **_: {"wake_prefix": ["#"]})
+    await ui.send_card(
+        event, "任务", "歌曲：A * B\n状态：处理中", actions=[("刷新", "查看翻唱任务")]
+    )
+    payload = event.bot.api.post_group_message.await_args.kwargs
+    assert "**歌曲**：A \\* B" in payload["markdown"]["content"]
+    action = payload["keyboard"]["content"]["rows"][0]["buttons"][0]["action"]
+    assert action["type"] == 2 and action["enter"] is True
+    assert action["data"] == "#查看翻唱任务"
+    assert action["permission"]["specify_user_ids"] == ["owner"]
+
+
+@pytest.mark.asyncio
+async def test_info_card_falls_back_to_text_on_unsupported_account():
+    event = FakeEvent()
+    event.bot.api.post_group_message.side_effect = PermissionError("markdown denied")
+    ui = CoverSelectionUI()
+    await ui.send_card(
+        event, "翻唱帮助", "使用 /rvc 歌名", actions=[("音色", "刷新rvc模型")]
+    )
+    assert event.bot.api.post_group_message.await_count == 2
+    assert "使用 /rvc 歌名" in event.sent[0].get_plain_text()
+    assert event.sent[0].use_markdown_ is False

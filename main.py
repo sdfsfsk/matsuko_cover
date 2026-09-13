@@ -35,7 +35,7 @@ MODEL_ALIAS_SEPARATOR = "|||"
     "astrbot_plugin_matsuko_cover",
     "Matsuko",
     "RVC/SVC/SoulX-SVCVC翻唱网易云/QQ音乐歌曲（支持LLM智能调用、智能错误反馈、QQ音乐风控自动重试）",
-    "2.12.0",
+    "2.13.0",
     "https://github.com/sdfsfsk/matsuko_cover",
 )
 class MusicPlugin(Star):
@@ -57,6 +57,7 @@ class MusicPlugin(Star):
         self.selection_ui = CoverSelectionUI(
             buttons=bool(config.get("qq_official_buttons", True)),
             config_getter=context.get_config,
+            cards=bool(config.get("qq_official_cards", True)),
         )
         
         self.rvc_models_keywords = config.get("rvc_models_keywords", [])
@@ -1954,6 +1955,32 @@ class MusicPlugin(Star):
 
     # ==================== 命令处理（支持LLM强制模式） ====================
 
+    @filter.command("翻唱帮助")
+    async def cover_help(self, event: AstrMessageEvent):
+        """Show entry points and read-only shortcuts for the cover workflow.
+
+        Args:
+            event: Message requesting the help card.
+        """
+        await self.selection_ui.send_card(
+            event,
+            "🎵 松子翻唱",
+            "网易云音乐：/rvc、/svc、/svcvc <歌名> [升降调]\n"
+            "QQ 音乐：/qqrvc、/qqsvc、/qqsvcvc <歌名> [升降调]\n"
+            "本地音频：发送音频后使用 /本地翻唱\n\n"
+            "点歌后依次选择歌曲和音色，翻唱完成后发送音频。\n"
+            "选择菜单支持按钮、序号、翻页和取消。\n"
+            "已禁用的引擎或音乐来源以插件配置为准。\n"
+            "LLM 强制模式下，请直接说“帮我翻唱《歌名》”。",
+            actions=[
+                ("RVC 音色", "刷新rvc模型"),
+                ("SVC 音色", "刷新svc模型"),
+                ("SoulX 音色", "刷新svcvc音色"),
+                ("翻唱任务", "查看翻唱任务"),
+                ("我的统计", "我的翻唱统计"),
+            ],
+        )
+
     @filter.command("查看翻唱缓存")
     async def show_cover_cache(self, event: AstrMessageEvent):
         """查看各中间层当前缓存占用。"""
@@ -1980,7 +2007,9 @@ class MusicPlugin(Star):
                     )
             except Exception as exc:
                 lines.append(f"{label}: 无法读取（{exc}）")
-        yield event.plain_result("📦 翻唱缓存状态：\n" + "\n".join(lines))
+        await self.selection_ui.send_card(
+            event, "📦 翻唱缓存", "📦 翻唱缓存状态：\n" + "\n".join(lines)
+        )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("清理翻唱缓存")
@@ -2004,7 +2033,9 @@ class MusicPlugin(Star):
                 )
             except Exception as exc:
                 lines.append(f"{label}: 清理失败（{exc}）")
-        yield event.plain_result("✅ 缓存清理完成：\n" + "\n".join(lines))
+        await self.selection_ui.send_card(
+            event, "🧹 缓存清理结果", "✅ 缓存清理完成：\n" + "\n".join(lines)
+        )
 
     @filter.command("列出msst模型")
     async def list_msst_models(self, event: AstrMessageEvent):
@@ -2021,10 +2052,12 @@ class MusicPlugin(Star):
             + ("  ← 当前默认" if item["id"] == self.msst_default_model else "")
             for index, item in enumerate(models, 1)
         ]
-        yield event.plain_result(
+        await self.selection_ui.send_card(
+            event,
+            "🎛️ MSST 分离模型",
             "可用的 MSST 人声分离模型：\n"
             + "\n".join(lines)
-            + "\n\n管理员可使用：/切换msst模型 <序号或模型名>"
+            + "\n\n管理员可使用：/切换msst模型 <序号或模型名>",
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -2086,11 +2119,12 @@ class MusicPlugin(Star):
         self.config.save_config()
         synced_backend = await self._sync_msst_model_selection(self.msst_default_model)
         sync_text = f"\n中间层确认：{synced_backend}" if synced_backend else ""
-        yield event.plain_result(
+        await self.selection_ui.send_card(
+            event,
+            "✅ MSST 模型设置",
             f"✅ MSST 默认模型已切换为：{selected['name']}\n"
             f"模型 ID：{selected['id']}\n"
-            "之后的新翻唱任务会使用该模型；已有缓存会按模型分别保存。"
-            + sync_text
+            "之后的新翻唱任务会使用该模型；已有缓存会按模型分别保存。" + sync_text,
         )
 
     @filter.command("列出svcvc分离模型")
@@ -2109,10 +2143,12 @@ class MusicPlugin(Star):
             + ("  ← 当前使用" if item.get("current") else "")
             for index, item in enumerate(models, 1)
         ]
-        yield event.plain_result(
+        await self.selection_ui.send_card(
+            event,
+            "🎛️ SoulX 分离模型",
             "SVCVC-API-SVF 可用的 MSST 人声分离模型：\n"
             + "\n".join(lines)
-            + "\n\n管理员可使用：/切换svcvc分离模型 <序号或模型名>"
+            + "\n\n管理员可使用：/切换svcvc分离模型 <序号或模型名>",
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -2184,12 +2220,14 @@ class MusicPlugin(Star):
         self.msst_default_model = selected_id
         self.config["msst_default_model"] = selected_id
         self.config.save_config()
-        yield event.plain_result(
+        await self.selection_ui.send_card(
+            event,
+            "✅ SoulX 分离模型设置",
             f"✅ SVCVC 分离模型已切换为：{result.get('name') or selected['name']}\n"
             f"模型 ID：{result.get('id') or selected['id']}\n"
-            "中间层与插件配置均已同步；之后的新任务会使用该模型，分离缓存按模型隔离。"
+            "中间层与插件配置均已同步；之后的新任务会使用该模型，分离缓存按模型隔离。",
         )
-    
+
     @filter.command("刷新rvc模型")
     async def refresh_rvc_models(self, event: AstrMessageEvent):
         yield event.plain_result("正在刷新 RVC 模型列表，请稍候...")
@@ -2411,7 +2449,7 @@ class MusicPlugin(Star):
                 lines.append(f"{i}. {song['name']} - {song['artists']} ({minutes}:{seconds:02d})")
             lines.append("")
             lines.append("💡 使用 /qqrvc、/qqsvc 或 /qqsvcvc <歌名> 进行翻唱")
-            yield event.plain_result("\n".join(lines))
+            await self.selection_ui.send_card(event, "🎵 QQ 音乐搜索", "\n".join(lines))
         except Exception as e:
             logger.error(f"QQ音乐搜索失败: {e}")
             yield event.plain_result(f"搜索失败: {e}")
@@ -2468,7 +2506,14 @@ class MusicPlugin(Star):
         args = event.message_str.replace(cmd, "").strip().split()
 
         if not args:
-            yield event.plain_result(f"用法: /{cmd} <歌名> [升降调]")
+            await self.selection_ui.send_card(
+                event,
+                f"🎵 {self._engine_display_name(api_type)} 翻唱",
+                f"用法：/{cmd} <歌名> [升降调]\n"
+                f"示例：/{cmd} 优しい詩。\n\n"
+                "输入歌名后，按卡片选择歌曲，再选择模型或参考音色。\n"
+                "发送 /翻唱帮助 查看所有入口。",
+            )
             return
 
         key_shift, song_name = (None if api_type == "svcvc" else 0), " ".join(args)
@@ -2497,7 +2542,7 @@ class MusicPlugin(Star):
         try:
             selected_song_index, event = await self.selection_ui.choose(
                 event,
-                "为您找到以下歌曲，请选择：",
+                f"🎵 {self._engine_display_name(api_type)} · 选择歌曲\n来源：网易云音乐",
                 [f"{song['name']} - {song['artists']}" for song in songs],
                 self.timeout,
             )
@@ -2517,7 +2562,7 @@ class MusicPlugin(Star):
                 return
             selected_model_index, event = await self.selection_ui.choose(
                 event,
-                f"已选歌曲：{selected_song['name']}\n使用：{self._engine_display_name(api_type)}\n请选择模型/参考音色：",
+                f"🎙️ {self._engine_display_name(api_type)} · 选择音色\n已选歌曲：{selected_song['name']}\n歌手：{selected_song['artists']}",
                 [line.split(". ", 1)[1] for line in display_str.splitlines()],
                 self.timeout,
             )
@@ -2533,10 +2578,13 @@ class MusicPlugin(Star):
 
         selected_model = keys[selected_model_index]
 
-        await event.send(
-            event.plain_result(
-                f"正在使用 {self._engine_display_name(api_type)} 模型/音色【{selected_model}】为您生成《{selected_song['name']}》，请耐心等待..."
-            )
+        await self.selection_ui.send_card(
+            event,
+            "🎙️ 开始翻唱",
+            f"歌曲：{selected_song['name']}\n歌手：{selected_song['artists']}\n"
+            f"引擎：{self._engine_display_name(api_type)}\n音色：{selected_model}\n"
+            f"来源：网易云音乐\n升降调：{key_shift if key_shift is not None else '自动'}\n\n"
+            "已开始生成，完成后会发送音频。",
         )
         await self._send_song(
             event=event,
@@ -2553,7 +2601,14 @@ class MusicPlugin(Star):
         args = event.message_str.replace(cmd, "").strip().split()
 
         if not args:
-            yield event.plain_result(f"用法: /{cmd} <歌名> [升降调]")
+            await self.selection_ui.send_card(
+                event,
+                f"🎵 {self._engine_display_name(api_type)} 翻唱",
+                f"用法：/{cmd} <歌名> [升降调]\n"
+                f"示例：/{cmd} 优しい詩。\n\n"
+                "输入歌名后，按卡片选择歌曲，再选择模型或参考音色。\n"
+                "发送 /翻唱帮助 查看所有入口。",
+            )
             return
 
         key_shift, song_name = (None if api_type == "svcvc" else 0), " ".join(args)
@@ -2587,7 +2642,7 @@ class MusicPlugin(Star):
             try:
                 selected_song_index, event = await self.selection_ui.choose(
                     event,
-                    "QQ 音乐搜索结果，请选择：",
+                    f"🎵 {self._engine_display_name(api_type)} · 选择歌曲\n来源：QQ 音乐",
                     [f"{song['name']} - {song['artists']}" for song in songs],
                     self.timeout,
                 )
@@ -2609,7 +2664,7 @@ class MusicPlugin(Star):
                     return
                 selected_model_index, event = await self.selection_ui.choose(
                     event,
-                    f"已选歌曲：{selected_song['name']}\n使用：{self._engine_display_name(api_type)}\n请选择模型/参考音色：",
+                    f"🎙️ {self._engine_display_name(api_type)} · 选择音色\n已选歌曲：{selected_song['name']}\n歌手：{selected_song['artists']}",
                     [line.split(". ", 1)[1] for line in display_str.splitlines()],
                     self.timeout,
                 )
@@ -2625,10 +2680,13 @@ class MusicPlugin(Star):
 
             selected_model = keys[selected_model_index]
 
-            await event.send(
-                event.plain_result(
-                    f"🎵 正在使用 {self._engine_display_name(api_type)} 模型/音色【{selected_model}】为您生成《{selected_song['name']}》（QQ音乐），请耐心等待..."
-                )
+            await self.selection_ui.send_card(
+                event,
+                "🎙️ 开始翻唱",
+                f"歌曲：{selected_song['name']}\n歌手：{selected_song['artists']}\n"
+                f"引擎：{self._engine_display_name(api_type)}\n音色：{selected_model}\n"
+                f"来源：QQ 音乐\n升降调：{key_shift if key_shift is not None else '自动'}\n\n"
+                "已开始生成，完成后会发送音频。",
             )
             await self._send_song(
                 event=event,
@@ -2872,8 +2930,12 @@ class MusicPlugin(Star):
         effective_seed = None
         try:
             engine_display = self._engine_display_name(api_type)
-            await event.send(event.plain_result(f"🎵 正在用【{model_display}】({engine_display}) 处理您的音频，请稍候..."))
-            
+            await self.selection_ui.send_card(
+                event,
+                "🎙️ 本地音频翻唱",
+                f"🎵 正在用【{model_display}】({engine_display}) 处理您的音频，请稍候...",
+            )
+
             result_path, cache_hit, effective_seed = await self._predict_cover(
                 event=event,
                 api_type=api_type,
@@ -2896,7 +2958,7 @@ class MusicPlugin(Star):
                 if self.enable_config_report:
                     actual_shift = self._effective_key_shift(api_type, key_shift)
                     result_msg += f"\n\n📊 本次配置：类型={engine_display}, 模型={model_display}, 调音={actual_shift:+d}"
-                await event.send(event.plain_result(result_msg))
+                await self.selection_ui.send_card(event, "✅ 翻唱完成", result_msg)
                 await self._notify_llm_with_context(event, song_display_name, "cache_hit" if cache_hit else "success")
             else:
                 await event.send(event.plain_result("❌ 处理失败，后端未返回有效文件路径。"))
@@ -4791,7 +4853,9 @@ class MusicPlugin(Star):
             yield event.plain_result("当前为LLM强制模式，请直接问我'查看翻唱任务'即可！")
             return
         result = await self.get_task_status(event)
-        yield event.plain_result(result)
+        await self.selection_ui.send_card(
+            event, "⏳ 翻唱任务", result, actions=[("刷新状态", "查看翻唱任务")]
+        )
 
     @filter.command("取消翻唱任务")
     async def cancel_task_cmd(self, event: AstrMessageEvent):
@@ -4799,7 +4863,7 @@ class MusicPlugin(Star):
             yield event.plain_result("当前为LLM强制模式，请直接问我'取消翻唱任务'即可！")
             return
         result = await self.cancel_cover_task(event)
-        yield event.plain_result(result)
+        await self.selection_ui.send_card(event, "🛑 任务取消结果", result)
 
     # ==================== 辅助命令 ====================
     
@@ -4809,8 +4873,8 @@ class MusicPlugin(Star):
             yield event.plain_result("当前为LLM强制模式，请直接问我'查看我的翻唱统计'即可！")
             return
         result = await self.view_my_stats(event)
-        yield event.plain_result(result)
-    
+        await self.selection_ui.send_card(event, "📈 我的翻唱统计", result)
+
     # ==================== 本地音频翻唱：事件监听 ====================
     
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)

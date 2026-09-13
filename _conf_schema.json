@@ -55,10 +55,16 @@
     "hint": "开启后，网易云音乐功能将被完全禁用（包括LLM自动调用翻唱工具和手动命令），所有点歌请求将强制使用QQ音乐。推荐开启以获取更全的音乐版权。",
     "default": false
   },
+  "qq_official_cards": {
+    "description": "自动识别 QQ 官方机器人并使用 Markdown 卡片",
+    "type": "bool",
+    "hint": "选歌、音色、翻唱状态、帮助和查询结果使用官方 Markdown 卡片。QQ群和单聊无需申请模板；频道需账号开通相应能力。按钮不可用时保留卡片，卡片发送失败才降级为文字。关闭后使用文字菜单。",
+    "default": true
+  },
   "qq_official_buttons": {
     "description": "自动识别 QQ 官方机器人并启用交互按钮",
     "type": "bool",
-    "hint": "开启后自动识别 QQ 官方机器人，使用点击即生效的回调按钮选歌、选音色、翻页和取消，无需发送确认消息，仅点歌者可操作。首次升级后请重启 QQ 官方机器人平台连接以订阅 INTERACTION_CREATE；Webhook 模式需在 QQ 开发者后台开启互动事件推送。按钮、Markdown 权限或订阅不可用时使用文字菜单。",
+    "hint": "配合卡片开关使用。优先使用回调按钮选歌、选音色、翻页和取消，仅点歌者可操作。旧 WebSocket 连接未订阅互动事件时，临时使用点击自动发送的指令按钮，无需手动确认；重启平台连接后恢复回调。Webhook 需在 QQ 后台开启互动事件推送。关闭按钮仍保留 Markdown 卡片。",
     "default": true
   },
   "timeout": {
