@@ -318,9 +318,6 @@ SoulX 在 AMD 上处理长歌曲时建议把 `inference_timeout` 和任务超时
 
 检查 `svcvc_random_seed` 是否关闭。歌曲内容、参考音色、种子、采样步数、CFG、升降调或模型资产变化都会生成新的缓存键。
 
-## 更新日志
-
-更早版本记录可通过 Git 历史和 GitHub Releases 查看。
 
 ## 安全与版权
 
